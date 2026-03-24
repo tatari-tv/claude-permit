@@ -80,6 +80,129 @@ impl EventStore {
     pub fn is_writable(&self) -> bool {
         self.conn.execute_batch("BEGIN; ROLLBACK;").is_ok()
     }
+
+    /// Query tool invocation patterns grouped by (tool_name, command_prefix),
+    /// returning patterns that meet the threshold and session count requirements.
+    pub fn suggest_patterns(&self, min_count: u32, min_sessions: u32) -> Result<Vec<PatternSuggestion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT tool_name, tool_input, COUNT(*) as cnt, COUNT(DISTINCT session_id) as sessions
+             FROM events
+             GROUP BY tool_name, tool_input
+             HAVING cnt >= ?1 AND sessions >= ?2
+             ORDER BY cnt DESC",
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![min_count, min_sessions], |row| {
+            Ok(PatternSuggestion {
+                tool_name: row.get(0)?,
+                tool_input: row.get(1)?,
+                count: row.get(2)?,
+                sessions: row.get(3)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.context("Failed to read pattern row")?);
+        }
+        Ok(results)
+    }
+
+    /// Get events for a specific session (or the latest session if None).
+    pub fn session_events(&self, session_id: Option<&str>) -> Result<Vec<EventRow>> {
+        let rows = if let Some(sid) = session_id {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, timestamp, session_id, tool_name, tool_input, risk_tier
+                 FROM events WHERE session_id = ?1 ORDER BY timestamp",
+            )?;
+            let rows = stmt.query_map([sid], map_event_row)?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            // Get latest session
+            let latest: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT session_id FROM events ORDER BY timestamp DESC LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .ok();
+
+            match latest {
+                Some(sid) => {
+                    let mut stmt = self.conn.prepare(
+                        "SELECT id, timestamp, session_id, tool_name, tool_input, risk_tier
+                         FROM events WHERE session_id = ?1 ORDER BY timestamp",
+                    )?;
+                    let rows = stmt.query_map([&sid], map_event_row)?;
+                    rows.collect::<std::result::Result<Vec<_>, _>>()?
+                }
+                None => Vec::new(),
+            }
+        };
+        Ok(rows)
+    }
+
+    /// Delete events older than the given number of days. Returns count deleted.
+    pub fn clean_older_than(&self, days: u32) -> Result<usize> {
+        let deleted = self.conn.execute(
+            "DELETE FROM events WHERE timestamp < datetime('now', ?1)",
+            [format!("-{days} days")],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Count events that would be deleted by clean_older_than.
+    pub fn count_older_than(&self, days: u32) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE timestamp < datetime('now', ?1)",
+            [format!("-{days} days")],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Get all distinct session IDs.
+    pub fn distinct_sessions(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT session_id FROM events")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
+}
+
+/// A suggested pattern from the database.
+#[derive(Debug)]
+pub struct PatternSuggestion {
+    pub tool_name: String,
+    pub tool_input: String,
+    pub count: i64,
+    pub sessions: i64,
+}
+
+/// A row from the events table.
+#[derive(Debug)]
+pub struct EventRow {
+    pub id: i64,
+    pub timestamp: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub tool_input: String,
+    pub risk_tier: Option<String>,
+}
+
+fn map_event_row(row: &rusqlite::Row) -> rusqlite::Result<EventRow> {
+    Ok(EventRow {
+        id: row.get(0)?,
+        timestamp: row.get(1)?,
+        session_id: row.get(2)?,
+        tool_name: row.get(3)?,
+        tool_input: row.get(4)?,
+        risk_tier: row.get(5)?,
+    })
 }
 
 #[cfg(test)]

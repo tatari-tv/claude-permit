@@ -1,3 +1,3 @@
 mod store;
 
-pub use store::EventStore;
+pub use store::{EventRow, EventStore, PatternSuggestion};

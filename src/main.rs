@@ -100,14 +100,24 @@ fn run() -> Result<()> {
             let risk_filter = risk.and_then(|r| claude_permit::risk::RiskTier::from_str_opt(&r));
             cmd::run_audit(&sp, &slp, &format, risk_filter)?;
         }
-        Command::Suggest { .. } => {
-            eprintln!("suggest command not yet implemented (Phase 3)");
+        Command::Suggest {
+            threshold,
+            sessions,
+            format,
+        } => {
+            let db_path = EventStore::default_path()?;
+            let store = EventStore::open(&db_path)?;
+            cmd::run_suggest(&store, threshold, sessions, &format)?;
         }
-        Command::Report { .. } => {
-            eprintln!("report command not yet implemented (Phase 3)");
+        Command::Report { session, format } => {
+            let db_path = EventStore::default_path()?;
+            let store = EventStore::open(&db_path)?;
+            cmd::run_report(&store, session.as_deref(), &format)?;
         }
-        Command::Clean { .. } => {
-            eprintln!("clean command not yet implemented (Phase 3)");
+        Command::Clean { older_than, dry_run } => {
+            let db_path = EventStore::default_path()?;
+            let store = EventStore::open(&db_path)?;
+            cmd::run_clean(&store, older_than, dry_run)?;
         }
     }
 
