@@ -76,4 +76,39 @@ pub enum Command {
 
     /// Verify hook installation and DB connectivity
     Check,
+
+    /// Apply audit recommendations to settings files
+    Apply {
+        /// Apply "promote" recommendations (move safe local rules to global)
+        #[arg(long)]
+        promote: bool,
+
+        /// Apply "remove" recommendations (delete dangerous local rules)
+        #[arg(long)]
+        remove: bool,
+
+        /// Apply "deny" recommendations (remove denied patterns from allow lists)
+        #[arg(long)]
+        deny: bool,
+
+        /// Apply all actionable recommendations (promote + remove + deny)
+        #[arg(long)]
+        all: bool,
+
+        /// Override settings.json path
+        #[arg(long)]
+        settings: Option<PathBuf>,
+
+        /// Override settings.local.json path
+        #[arg(long)]
+        settings_local: Option<PathBuf>,
+
+        /// Actually write changes (default is dry-run)
+        #[arg(long)]
+        yes: bool,
+
+        /// Skip creating backup files before writing
+        #[arg(long)]
+        no_backup: bool,
+    },
 }

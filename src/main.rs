@@ -120,6 +120,34 @@ fn run() -> Result<()> {
             let store = EventStore::open(&db_path)?;
             cmd::run_clean(&store, older_than, dry_run)?;
         }
+        Command::Apply {
+            promote,
+            remove,
+            deny,
+            all,
+            settings,
+            settings_local,
+            yes,
+            no_backup,
+        } => {
+            let do_promote = promote || all;
+            let do_remove = remove || all;
+            let do_deny = deny || all;
+
+            if !do_promote && !do_remove && !do_deny {
+                eprintln!("No filter specified. Use --promote, --remove, --deny, or --all.");
+                std::process::exit(1);
+            }
+
+            let sp = settings.unwrap_or_else(settings_path);
+            let slp = settings_local.unwrap_or_else(settings_local_path);
+            let filter = claude_permit::cmd::apply::ApplyFilter {
+                promote: do_promote,
+                remove: do_remove,
+                deny: do_deny,
+            };
+            cmd::run_apply(&sp, &slp, &filter, yes, !no_backup)?;
+        }
     }
 
     Ok(())
