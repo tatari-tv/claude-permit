@@ -89,8 +89,16 @@ fn run() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Command::Audit { .. } => {
-            eprintln!("audit command not yet implemented (Phase 2)");
+        Command::Audit {
+            settings,
+            settings_local,
+            format,
+            risk,
+        } => {
+            let sp = settings.unwrap_or_else(settings_path);
+            let slp = settings_local.unwrap_or_else(settings_local_path);
+            let risk_filter = risk.and_then(|r| claude_permit::risk::RiskTier::from_str_opt(&r));
+            cmd::run_audit(&sp, &slp, &format, risk_filter)?;
         }
         Command::Suggest { .. } => {
             eprintln!("suggest command not yet implemented (Phase 3)");
