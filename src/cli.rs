@@ -77,6 +77,17 @@ pub enum Command {
     /// Verify hook installation and DB connectivity
     Check,
 
+    /// Install the PreToolUse hook into Claude Code settings
+    Install {
+        /// Override settings.json path
+        #[arg(long)]
+        settings: Option<PathBuf>,
+
+        /// Actually write changes (default is dry-run)
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Apply audit recommendations to settings files
     Apply {
         /// Apply "promote" recommendations (move safe local rules to global)

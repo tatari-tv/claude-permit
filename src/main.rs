@@ -120,6 +120,10 @@ fn run() -> Result<()> {
             let store = EventStore::open(&db_path)?;
             cmd::run_clean(&store, older_than, dry_run)?;
         }
+        Command::Install { settings, yes } => {
+            let sp = settings.unwrap_or_else(settings_path);
+            cmd::run_install(&sp, yes)?;
+        }
         Command::Apply {
             promote,
             remove,
