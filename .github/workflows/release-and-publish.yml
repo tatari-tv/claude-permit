@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  RUST_VERSION: 1.94.0
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            suffix: linux-amd64
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            suffix: linux-arm64
+            cross: true
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl build-essential git pkg-config libssl-dev
+
+      - name: Install cross-compilation toolchain
+        if: matrix.cross
+        run: apt-get install -y gcc-aarch64-linux-gnu
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Mark workspace as safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set GIT_DESCRIBE environment variable
+        run: |
+          GIT_DESCRIBE=$(git describe --tags --dirty --always)
+          echo "GIT_DESCRIBE=$GIT_DESCRIBE" >> $GITHUB_ENV
+
+      - name: Set up Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.RUST_VERSION }}
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          . "$HOME/.cargo/env"
+          rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1-rust"
+          shared-key: ${{ matrix.target }}
+
+      - name: Build for ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.cross && 'aarch64-linux-gnu-gcc' || '' }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          mkdir -p artifacts/
+          cp target/${{ matrix.target }}/release/claude-permit artifacts/
+
+      - name: Archive artifacts
+        run: tar -czvf claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz -C artifacts claude-permit
+
+      - name: Generate checksum
+        run: sha256sum claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz > claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-permit-${{ matrix.suffix }}
+          path: |
+            claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz
+            claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz.sha256
+
+  build-macos:
+    runs-on: macos-14
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            suffix: macos-x86_64
+          - target: aarch64-apple-darwin
+            suffix: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set GIT_DESCRIBE environment variable
+        run: |
+          GIT_DESCRIBE=$(git describe --tags --dirty --always)
+          echo "GIT_DESCRIBE=$GIT_DESCRIBE" >> $GITHUB_ENV
+
+      - name: Set up Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${{ env.RUST_VERSION }}
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v1-rust"
+          shared-key: ${{ matrix.target }}
+
+      - name: Build for ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          mkdir -p artifacts/
+          cp target/${{ matrix.target }}/release/claude-permit artifacts/
+
+      - name: Archive artifacts
+        run: tar -czvf claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz -C artifacts claude-permit
+
+      - name: Generate checksum
+        run: shasum -a 256 claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz > claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz.sha256
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-permit-${{ matrix.suffix }}
+          path: |
+            claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz
+            claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz.sha256
+
+  create-release:
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 'artifacts/**'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

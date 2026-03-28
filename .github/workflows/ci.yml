@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  RUST_VERSION: 1.94.0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_VERSION }}
+        components: rustfmt, clippy
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: "v1-rust"
+
+    - name: Run tests
+      run: cargo test --verbose
+
+    - name: Check formatting
+      run: cargo fmt --check
+
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-14
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ env.RUST_VERSION }}
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        prefix-key: "v1-rust"
+        shared-key: ${{ matrix.os }}
+
+    - name: Build
+      run: cargo build --release --verbose
