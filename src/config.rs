@@ -18,6 +18,8 @@ pub struct Config {
     pub extra_deny_patterns: Vec<String>,
     /// Risk tier overrides: map from pattern to tier name.
     pub risk_overrides: std::collections::HashMap<String, String>,
+    /// Pager command for paginated output (e.g. "less -F -X"). None disables paging.
+    pub pager: Option<String>,
 }
 
 impl Default for Config {
@@ -29,6 +31,7 @@ impl Default for Config {
             enforce_deny: true,
             extra_deny_patterns: Vec::new(),
             risk_overrides: std::collections::HashMap::new(),
+            pager: None,
         }
     }
 }

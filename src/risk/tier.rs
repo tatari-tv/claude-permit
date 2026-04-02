@@ -236,8 +236,18 @@ pub fn classify_rule(rule: &str) -> RiskTier {
         return classify_bash_command(inner);
     }
 
+    if rule == "Edit" || rule == "Write" || rule == "Edit(**)" || rule == "Write(**)" {
+        return RiskTier::Dangerous;
+    }
+
     if rule.starts_with("Edit(") || rule.starts_with("Write(") {
         return RiskTier::Moderate;
+    }
+
+    if rule == "Read" || rule == "Glob" || rule == "Grep"
+        || rule == "Read(**)" || rule == "Glob(**)" || rule == "Grep(**)"
+    {
+        return RiskTier::Safe;
     }
 
     if rule.starts_with("Read(") || rule.starts_with("Glob(") || rule.starts_with("Grep(") {

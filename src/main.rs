@@ -74,10 +74,10 @@ fn run() -> Result<()> {
     setup_logging().context("Failed to setup logging")?;
 
     let cli = Cli::parse();
+    let config = Config::load(None).unwrap_or_default();
 
     match cli.command {
         Command::Log => {
-            let config = Config::load(None).unwrap_or_default();
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
             let result = cmd::run_log(&store, config.enforce_deny, &config.extra_deny_patterns)?;
@@ -99,7 +99,7 @@ fn run() -> Result<()> {
             let sp = settings.unwrap_or_else(settings_path);
             let slp = settings_local.unwrap_or_else(settings_local_path);
             let risk_filter = risk.and_then(|r| claude_permit::risk::RiskTier::from_str_opt(&r));
-            cmd::run_audit(&sp, &slp, &format, risk_filter)?;
+            cmd::run_audit(&sp, &slp, &format, risk_filter, config.pager.as_deref())?;
         }
         Command::Suggest {
             threshold,
@@ -108,12 +108,12 @@ fn run() -> Result<()> {
         } => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            cmd::run_suggest(&store, threshold, sessions, &format)?;
+            cmd::run_suggest(&store, threshold, sessions, &format, config.pager.as_deref())?;
         }
         Command::Report { session, format } => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            cmd::run_report(&store, session.as_deref(), &format)?;
+            cmd::run_report(&store, session.as_deref(), &format, config.pager.as_deref())?;
         }
         Command::Clean { older_than, dry_run } => {
             let db_path = EventStore::default_path()?;

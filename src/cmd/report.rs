@@ -2,6 +2,7 @@ use eyre::Result;
 use serde::Serialize;
 
 use crate::db::EventStore;
+use crate::pager::page_output;
 use crate::risk::{RiskTier, classify_tool_input};
 
 /// Summary of a session's permission activity.
@@ -87,7 +88,7 @@ pub fn report(store: &EventStore, session_id: Option<&str>) -> Result<SessionRep
 }
 
 /// Run the report command with output formatting.
-pub fn run_report(store: &EventStore, session_id: Option<&str>, format: &str) -> Result<()> {
+pub fn run_report(store: &EventStore, session_id: Option<&str>, format: &str, pager: Option<&str>) -> Result<()> {
     let rep = report(store, session_id)?;
 
     if rep.total_events == 0 {
@@ -98,27 +99,30 @@ pub fn run_report(store: &EventStore, session_id: Option<&str>, format: &str) ->
     match format {
         "json" => println!("{}", serde_json::to_string_pretty(&rep)?),
         _ => {
-            println!("Session: {}", rep.session_id);
-            println!(
-                "Events: {} total ({} safe, {} moderate, {} dangerous)",
+            let mut out = String::new();
+            out.push_str(&format!("Session: {}\n", rep.session_id));
+            out.push_str(&format!(
+                "Events: {} total ({} safe, {} moderate, {} dangerous)\n",
                 rep.total_events, rep.safe_count, rep.moderate_count, rep.dangerous_count
-            );
-            println!();
+            ));
+            out.push('\n');
 
             if !rep.tool_counts.is_empty() {
-                println!("Tool usage:");
+                out.push_str("Tool usage:\n");
                 for tc in &rep.tool_counts {
-                    println!("  {:<20} {}", tc.tool_name, tc.count);
+                    out.push_str(&format!("  {:<20} {}\n", tc.tool_name, tc.count));
                 }
-                println!();
+                out.push('\n');
             }
 
             if !rep.dangerous_events.is_empty() {
-                println!("Dangerous activity:");
+                out.push_str("Dangerous activity:\n");
                 for de in &rep.dangerous_events {
-                    println!("  {} {} ({})", de.tool_name, de.tool_input, de.timestamp);
+                    out.push_str(&format!("  {} {} ({})\n", de.tool_name, de.tool_input, de.timestamp));
                 }
             }
+
+            page_output(&out, pager);
         }
     }
 

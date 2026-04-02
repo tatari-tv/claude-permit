@@ -2,6 +2,7 @@ use eyre::Result;
 use serde::Serialize;
 use std::path::Path;
 
+use crate::pager::page_output;
 use crate::risk::{Recommendation, RiskTier, classify_rule, recommend};
 use crate::settings::load_settings;
 
@@ -52,36 +53,28 @@ pub fn format_table(entries: &[AuditEntry]) -> String {
         return "No rules found.".to_string();
     }
 
-    // Column widths
-    let rule_width = entries.iter().map(|e| e.rule.len()).max().unwrap_or(4).clamp(4, 60);
-    let list_width = 5;
     let source_width = 6;
     let risk_width = 9;
-    let rec_width = 14;
+    let action_width = 7; // "promote" is the longest value
+    let list_width = 5;
 
     let mut out = String::new();
 
-    // Header
+    // Header — Rule is last so it needs no padding
     out.push_str(&format!(
-        "{:<rule_width$}  {:<list_width$}  {:<source_width$}  {:<risk_width$}  {:<rec_width$}\n",
-        "Rule", "List", "Source", "Risk", "Recommendation"
+        "{:<source_width$}  {:<risk_width$}  {:<action_width$}  {:<list_width$}  {}\n",
+        "Source", "Risk", "Action", "List", "Rule"
     ));
     out.push_str(&format!(
-        "{:-<rule_width$}  {:-<list_width$}  {:-<source_width$}  {:-<risk_width$}  {:-<rec_width$}\n",
+        "{:-<source_width$}  {:-<risk_width$}  {:-<action_width$}  {:-<list_width$}  {:-<4}\n",
         "", "", "", "", ""
     ));
 
     // Rows
     for entry in entries {
-        let rule_display = if entry.rule.chars().count() > rule_width {
-            let truncated: String = entry.rule.chars().take(rule_width - 3).collect();
-            format!("{truncated}...")
-        } else {
-            entry.rule.clone()
-        };
         out.push_str(&format!(
-            "{:<rule_width$}  {:<list_width$}  {:<source_width$}  {:<risk_width$}  {:<rec_width$}\n",
-            rule_display, entry.list, entry.source, entry.risk, entry.recommendation
+            "{:<source_width$}  {:<risk_width$}  {:<action_width$}  {:<list_width$}  {}\n",
+            entry.source, entry.risk, entry.recommendation, entry.list, entry.rule
         ));
     }
 
@@ -99,21 +92,23 @@ pub fn run_audit(
     settings_local_path: &Path,
     format: &str,
     risk_filter: Option<RiskTier>,
+    pager: Option<&str>,
 ) -> Result<()> {
     let entries = audit(settings_path, settings_local_path, risk_filter)?;
 
     match format {
         "json" => println!("{}", format_json(&entries)?),
         "markdown" => {
-            // Markdown uses same table format with pipes
+            let mut out = String::new();
             for entry in &entries {
-                println!(
-                    "| {} | {} | {} | {} | {} |",
-                    entry.rule, entry.list, entry.source, entry.risk, entry.recommendation
-                );
+                out.push_str(&format!(
+                    "| {} | {} | {} | {} | {} |\n",
+                    entry.source, entry.risk, entry.recommendation, entry.list, entry.rule
+                ));
             }
+            page_output(&out, pager);
         }
-        _ => print!("{}", format_table(&entries)),
+        _ => page_output(&format_table(&entries), pager),
     }
 
     // Summary
