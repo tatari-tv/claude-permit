@@ -4,7 +4,8 @@ use eyre::Result;
 use serde::Serialize;
 
 use crate::db::EventStore;
-use crate::risk::{RiskTier, classify_tool_input};
+use crate::pager::page_output;
+use crate::risk::{RiskTier, classify_rule};
 
 /// Internal Claude mechanics tools - not relevant for permission rules.
 const SKIP_TOOLS: &[&str] = &[
@@ -42,8 +43,8 @@ pub fn suggest(store: &EventStore, threshold: u32, min_sessions: u32) -> Result<
         .into_iter()
         .filter(|p| !SKIP_TOOLS.contains(&p.tool_name.as_str()))
         .map(|p| {
-            let risk = classify_tool_input(&p.tool_name, &p.tool_input);
             let suggested_rule = make_rule(&p.tool_name, &p.tool_input);
+            let risk = classify_rule(&suggested_rule);
             let pattern = format_pattern(&p.tool_name, &p.tool_input);
             (pattern, suggested_rule, p.count, p.sessions, risk)
         })
@@ -87,7 +88,7 @@ fn make_rule(tool_name: &str, tool_input: &str) -> String {
             format!("Bash({prefix}:*)")
         }
         "Edit" | "Write" | "Read" | "Glob" | "Grep" => {
-            tool_name.to_string()
+            format!("{tool_name}(**)")
         }
         "WebFetch" => {
             if let Some(domain) = extract_domain(tool_input) {
@@ -143,16 +144,6 @@ fn collapse_home(path: &str) -> String {
     path.to_string()
 }
 
-/// Truncate a string to `max` chars, appending `...` if cut.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let cut = s.char_indices().nth(max - 3).map(|(i, _)| i).unwrap_or(s.len());
-        format!("{}...", &s[..cut])
-    }
-}
-
 /// Extract domain from a URL.
 fn extract_domain(url: &str) -> Option<String> {
     url.split("//")
@@ -162,7 +153,7 @@ fn extract_domain(url: &str) -> Option<String> {
 }
 
 /// Run the suggest command with output formatting.
-pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, format: &str) -> Result<()> {
+pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, format: &str, pager: Option<&str>) -> Result<()> {
     let entries = suggest(store, threshold, min_sessions)?;
 
     if entries.is_empty() {
@@ -173,28 +164,37 @@ pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, format
     match format {
         "json" => println!("{}", serde_json::to_string_pretty(&entries)?),
         _ => {
-            const PAT_MAX: usize = 36;
-            const RULE_MAX: usize = 48;
+            use std::fmt::Write as FmtWrite;
 
-            println!(
-                "{:<PAT_MAX$}  {:>5}  {:>8}  {:<RULE_MAX$}  {}",
-                "Pattern", "Count", "Sessions", "Suggested Rule", "Risk"
-            );
-            println!(
-                "{:-<PAT_MAX$}  {:->5}  {:->8}  {:-<RULE_MAX$}  {:-<8}",
-                "", "", "", "", ""
-            );
+            let (claude_entries, system_entries): (Vec<_>, Vec<_>) =
+                entries.iter().partition(|e| !e.suggested_rule.starts_with("Bash("));
 
-            for entry in &entries {
-                println!(
-                    "{:<PAT_MAX$}  {:>5}  {:>8}  {:<RULE_MAX$}  {}",
-                    truncate(&entry.pattern, PAT_MAX),
-                    entry.count,
-                    entry.sessions,
-                    truncate(&entry.suggested_rule, RULE_MAX),
-                    entry.risk
-                );
+            let rw = entries
+                .iter()
+                .map(|e| e.suggested_rule.len())
+                .chain(std::iter::once("Rule".len()))
+                .max()
+                .unwrap_or(20);
+
+            let mut out = String::new();
+            let sep = format!("{:-<9}  {:->5}  {:->8}  {:-<rw$}", "", "", "", "");
+
+            writeln!(out, "{:<9}  {:>5}  {:>8}  {}", "Risk", "Count", "Sessions", "Rule").unwrap();
+            writeln!(out, "{sep}").unwrap();
+
+            for e in &claude_entries {
+                writeln!(out, "{:<9}  {:>5}  {:>8}  {}", e.risk, e.count, e.sessions, e.suggested_rule).unwrap();
             }
+
+            if !claude_entries.is_empty() && !system_entries.is_empty() {
+                writeln!(out, "{sep}").unwrap();
+            }
+
+            for e in &system_entries {
+                writeln!(out, "{:<9}  {:>5}  {:>8}  {}", e.risk, e.count, e.sessions, e.suggested_rule).unwrap();
+            }
+
+            page_output(&out, pager);
         }
     }
 
@@ -243,19 +243,6 @@ mod tests {
             make_rule("mcp__atlassian__getJiraIssue", "{}"),
             "mcp__atlassian__getJiraIssue"
         );
-    }
-
-    #[test]
-    fn truncate_short() {
-        assert_eq!(truncate("hello", 10), "hello");
-    }
-
-    #[test]
-    fn truncate_long() {
-        let s = "abcdefghijklmnop";
-        let result = truncate(s, 10);
-        assert_eq!(result, "abcdefg...");
-        assert_eq!(result.chars().count(), 10);
     }
 
     #[test]
