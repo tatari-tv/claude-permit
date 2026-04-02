@@ -12,11 +12,11 @@ pub enum RiskTier {
 
 impl fmt::Display for RiskTier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RiskTier::Safe => write!(f, "safe"),
-            RiskTier::Moderate => write!(f, "moderate"),
-            RiskTier::Dangerous => write!(f, "dangerous"),
-        }
+        f.pad(match self {
+            RiskTier::Safe => "safe",
+            RiskTier::Moderate => "moderate",
+            RiskTier::Dangerous => "dangerous",
+        })
     }
 }
 
@@ -44,13 +44,13 @@ pub enum Recommendation {
 
 impl fmt::Display for Recommendation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Recommendation::Promote => write!(f, "promote"),
-            Recommendation::Keep => write!(f, "keep"),
-            Recommendation::Narrow => write!(f, "narrow"),
-            Recommendation::Remove => write!(f, "remove"),
-            Recommendation::Deny => write!(f, "deny"),
-        }
+        f.pad(match self {
+            Recommendation::Promote => "promote",
+            Recommendation::Keep => "keep",
+            Recommendation::Narrow => "narrow",
+            Recommendation::Remove => "remove",
+            Recommendation::Deny => "deny",
+        })
     }
 }
 

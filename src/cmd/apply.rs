@@ -67,16 +67,17 @@ pub fn run_apply(
 
     // Create backups
     if backup {
-        let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S");
-        let global_bak = format!("{}.bak.{ts}", settings_path.display());
-        let local_bak = format!("{}.bak.{ts}", settings_local_path.display());
-
-        std::fs::write(&global_bak, &global_content).context("Failed to create settings.json backup")?;
-        println!("Backup: {global_bak}");
-
+        let mut args = vec![settings_path.to_str().expect("valid path")];
         if settings_local_path.exists() {
-            std::fs::write(&local_bak, &local_content).context("Failed to create settings.local.json backup")?;
-            println!("Backup: {local_bak}");
+            args.push(settings_local_path.to_str().expect("valid path"));
+        }
+        let status = std::process::Command::new("rkvr")
+            .arg("bkup")
+            .args(&args)
+            .status()
+            .context("Failed to run rkvr bkup")?;
+        if !status.success() {
+            eyre::bail!("rkvr bkup failed");
         }
     }
 
@@ -142,6 +143,9 @@ fn build_summary(entries: &[AuditEntry], filter: &ApplyFilter) -> ApplySummary {
     let mut narrow_skipped = 0;
 
     for entry in entries {
+        if entry.list != "allow" {
+            continue;
+        }
         match entry.recommendation {
             Recommendation::Promote if filter.promote => {
                 promoted.push(entry.rule.clone());
@@ -372,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_creates_files() {
+    fn backup_runs_without_error() {
         let dir = TempDir::new().expect("temp");
         let (gp, lp) = write_settings(
             dir.path(),
@@ -385,15 +389,8 @@ mod tests {
             remove: true,
             deny: false,
         };
+        // rkvr must be available in PATH; this is an integration smoke test
         run_apply(&gp, &lp, &filter, true, true).expect("apply");
-
-        // Check that backup files were created
-        let entries: Vec<_> = std::fs::read_dir(dir.path())
-            .expect("readdir")
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().contains(".bak."))
-            .collect();
-        assert!(!entries.is_empty(), "expected at least one backup file");
     }
 
     #[test]
@@ -441,6 +438,28 @@ mod tests {
         let local: Value = serde_json::from_str(&std::fs::read_to_string(&lp).expect("read")).expect("parse");
         let local_allow = local["permissions"]["allow"].as_array().expect("array");
         assert_eq!(local_allow.len(), 2);
+    }
+
+    #[test]
+    fn deny_list_rules_not_acted_on() {
+        let dir = TempDir::new().expect("temp");
+        let (gp, lp) = write_settings(
+            dir.path(),
+            r#"{"permissions":{"allow":[],"deny":["Bash(git tag -d *)","Bash(rm -rf:*)"]}}"#,
+            r#"{"permissions":{"allow":[]}}"#,
+        );
+
+        let filter = ApplyFilter {
+            promote: true,
+            remove: true,
+            deny: true,
+        };
+        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+
+        // Deny-list rules should not be touched - they're already denied
+        let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
+        let deny = global["permissions"]["deny"].as_array().expect("array");
+        assert_eq!(deny.len(), 2, "deny list should be unchanged");
     }
 
     #[test]
