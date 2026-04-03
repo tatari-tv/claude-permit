@@ -98,13 +98,10 @@ pub fn apply_entries(
         if settings_local_path.exists() {
             args.push(settings_local_path.to_str().expect("valid path"));
         }
-        let status = std::process::Command::new("rkvr")
-            .arg("bkup")
-            .args(&args)
-            .status()
-            .context("Failed to run rkvr bkup")?;
-        if !status.success() {
-            bail!("rkvr bkup failed");
+        match std::process::Command::new("rkvr").arg("bkup").args(&args).status() {
+            Ok(status) if status.success() => {}
+            Ok(_) => eprintln!("warning: rkvr bkup failed; continuing without backup"),
+            Err(_) => eprintln!("warning: rkvr not found; continuing without backup"),
         }
     }
 
