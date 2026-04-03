@@ -9,8 +9,7 @@ use std::path::Path;
 pub fn run_install(settings_path: &Path, yes: bool) -> Result<bool> {
     // Read or create settings
     let mut root: Map<String, Value> = if settings_path.exists() {
-        let content =
-            std::fs::read_to_string(settings_path).context("Failed to read settings file")?;
+        let content = std::fs::read_to_string(settings_path).context("Failed to read settings file")?;
         serde_json::from_str(&content).context("Failed to parse settings JSON")?
     } else {
         if !yes {
@@ -38,10 +37,7 @@ pub fn run_install(settings_path: &Path, yes: bool) -> Result<bool> {
     }
 
     if !yes {
-        println!(
-            "Would add claude-permit PreToolUse hook to {}",
-            settings_path.display()
-        );
+        println!("Would add claude-permit PreToolUse hook to {}", settings_path.display());
         println!("Pass --yes to apply.");
         return Ok(false);
     }
@@ -51,8 +47,7 @@ pub fn run_install(settings_path: &Path, yes: bool) -> Result<bool> {
 
     // Write back
     let output = serde_json::to_string_pretty(&root).context("Failed to serialize settings")?;
-    std::fs::write(settings_path, format!("{output}\n"))
-        .context("Failed to write settings file")?;
+    std::fs::write(settings_path, format!("{output}\n")).context("Failed to write settings file")?;
 
     println!(
         "{} Installed claude-permit hook in {}",
@@ -183,16 +178,11 @@ mod tests {
     fn install_preserves_other_fields() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(
-            &path,
-            r#"{"model": "opus", "permissions": {"allow": ["Bash(ls:*)"]}}"#,
-        )
-        .unwrap();
+        std::fs::write(&path, r#"{"model": "opus", "permissions": {"allow": ["Bash(ls:*)"]}}"#).unwrap();
 
         run_install(&path, true).unwrap();
 
-        let root: Map<String, Value> =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let root: Map<String, Value> = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(root.get("model").and_then(|v| v.as_str()), Some("opus"));
         assert!(root.get("permissions").is_some());
         assert!(root.get("hooks").is_some());
