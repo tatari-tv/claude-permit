@@ -56,9 +56,7 @@ pub fn suggest(store: &EventStore, threshold: u32, min_sessions: u32) -> Result<
     // and "otto ci --flag2" both become Bash(otto ci:*)).
     let mut deduped: HashMap<String, (String, i64, i64, RiskTier)> = HashMap::new();
     for (pattern, rule, count, sessions, risk) in raw {
-        let entry = deduped
-            .entry(rule.clone())
-            .or_insert_with(|| (pattern, 0, 0, risk));
+        let entry = deduped.entry(rule.clone()).or_insert_with(|| (pattern, 0, 0, risk));
         entry.1 += count;
         if sessions > entry.2 {
             entry.2 = sessions;
@@ -124,9 +122,7 @@ fn command_prefix(cmd: &str) -> String {
 fn format_pattern(tool_name: &str, tool_input: &str) -> String {
     match tool_name {
         "Bash" => command_prefix(tool_input),
-        "Read" | "Edit" | "Write" | "Glob" | "Grep" => {
-            tool_name.to_string()
-        }
+        "Read" | "Edit" | "Write" | "Glob" | "Grep" => tool_name.to_string(),
         _ => {
             let input = collapse_home(tool_input);
             format!("{tool_name} {input}")
@@ -154,7 +150,14 @@ fn extract_domain(url: &str) -> Option<String> {
 }
 
 /// Run the suggest command with output formatting.
-pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, patterns: &[String], format: &str, pager: Option<&str>) -> Result<()> {
+pub fn run_suggest(
+    store: &EventStore,
+    threshold: u32,
+    min_sessions: u32,
+    patterns: &[String],
+    format: &str,
+    pager: Option<&str>,
+) -> Result<()> {
     let entries = suggest(store, threshold, min_sessions)?;
     let entries = filter_by_patterns(entries, patterns, |e| e.suggested_rule.as_str());
 
@@ -181,11 +184,16 @@ pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, patter
             let mut out = String::new();
             let sep = format!("{:-<9}  {:->5}  {:->8}  {:-<rw$}", "", "", "", "");
 
-            writeln!(out, "{:<9}  {:>5}  {:>8}  {}", "Risk", "Count", "Sessions", "Rule").unwrap();
+            writeln!(out, "{:<9}  {:>5}  {:>8}  Rule", "Risk", "Count", "Sessions").unwrap();
             writeln!(out, "{sep}").unwrap();
 
             for e in &claude_entries {
-                writeln!(out, "{:<9}  {:>5}  {:>8}  {}", e.risk, e.count, e.sessions, e.suggested_rule).unwrap();
+                writeln!(
+                    out,
+                    "{:<9}  {:>5}  {:>8}  {}",
+                    e.risk, e.count, e.sessions, e.suggested_rule
+                )
+                .unwrap();
             }
 
             if !claude_entries.is_empty() && !system_entries.is_empty() {
@@ -193,7 +201,12 @@ pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, patter
             }
 
             for e in &system_entries {
-                writeln!(out, "{:<9}  {:>5}  {:>8}  {}", e.risk, e.count, e.sessions, e.suggested_rule).unwrap();
+                writeln!(
+                    out,
+                    "{:<9}  {:>5}  {:>8}  {}",
+                    e.risk, e.count, e.sessions, e.suggested_rule
+                )
+                .unwrap();
             }
 
             page_output(&out, pager);
@@ -267,15 +280,7 @@ mod tests {
                 )
                 .expect("insert");
             store
-                .insert_event(
-                    "2026-03-24T12:01:00Z",
-                    &session,
-                    "Bash",
-                    "otto ci",
-                    None,
-                    None,
-                    None,
-                )
+                .insert_event("2026-03-24T12:01:00Z", &session, "Bash", "otto ci", None, None, None)
                 .expect("insert");
         }
 

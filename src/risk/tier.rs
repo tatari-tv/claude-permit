@@ -73,9 +73,7 @@ pub fn subsumes(broad: &str, narrow: &str) -> bool {
 
     // File-tool subsumption: Tool(**) subsumes Tool(<anything else>)
     if let (Some((bt, bp)), Some((nt, np))) = (split_paren(broad), split_paren(narrow)) {
-        if bt == nt && bp == "**" && np != "**" {
-            return true;
-        }
+        return bt == nt && bp == "**" && np != "**";
     }
 
     false
@@ -618,8 +616,14 @@ mod tests {
 
     #[test]
     fn env_var_prefix_is_dangerous() {
-        assert_eq!(classify_rule("Bash(GH_TOKEN=\"$TOKEN\" gh pr view:*)"), RiskTier::Dangerous);
-        assert_eq!(classify_rule("Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id\" git push:*)"), RiskTier::Dangerous);
+        assert_eq!(
+            classify_rule("Bash(GH_TOKEN=\"$TOKEN\" gh pr view:*)"),
+            RiskTier::Dangerous
+        );
+        assert_eq!(
+            classify_rule("Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id\" git push:*)"),
+            RiskTier::Dangerous
+        );
         assert_eq!(classify_rule("Bash(API_KEY=\"abc\" curl:*)"), RiskTier::Dangerous);
     }
 

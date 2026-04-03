@@ -45,19 +45,17 @@ pub fn audit(
     // Mark rules made redundant by a broader rule in the same list (allow or deny).
     // Cross-list matches are intentional: deny rules carve out from a broad allow.
     // Permanent-deny rules (Recommendation::Deny) are never overridden.
-    let snapshots: Vec<(String, String)> = entries
-        .iter()
-        .map(|e| (e.list.clone(), e.rule.clone()))
-        .collect();
-    for i in 0..entries.len() {
-        if entries[i].recommendation == Recommendation::Deny {
+    let snapshots: Vec<(String, String)> = entries.iter().map(|e| (e.list.clone(), e.rule.clone())).collect();
+    for (i, entry) in entries.iter_mut().enumerate() {
+        if entry.recommendation == Recommendation::Deny {
             continue;
         }
-        let covered = snapshots.iter().enumerate().any(|(j, (list, rule))| {
-            j != i && *list == entries[i].list && subsumes(rule, &entries[i].rule)
-        });
+        let covered = snapshots
+            .iter()
+            .enumerate()
+            .any(|(j, (list, rule))| j != i && *list == entry.list && subsumes(rule, &entry.rule));
         if covered {
-            entries[i].recommendation = Recommendation::Dupe;
+            entry.recommendation = Recommendation::Dupe;
         }
     }
 
@@ -141,11 +139,26 @@ pub fn run_audit(
     }
 
     let total = entries.len();
-    let deny_count = entries.iter().filter(|e| e.recommendation == Recommendation::Deny).count();
-    let narrow_count = entries.iter().filter(|e| e.recommendation == Recommendation::Narrow).count();
-    let promote_count = entries.iter().filter(|e| e.recommendation == Recommendation::Promote).count();
-    let remove_count = entries.iter().filter(|e| e.recommendation == Recommendation::Remove).count();
-    let dupe_count = entries.iter().filter(|e| e.recommendation == Recommendation::Dupe).count();
+    let deny_count = entries
+        .iter()
+        .filter(|e| e.recommendation == Recommendation::Deny)
+        .count();
+    let narrow_count = entries
+        .iter()
+        .filter(|e| e.recommendation == Recommendation::Narrow)
+        .count();
+    let promote_count = entries
+        .iter()
+        .filter(|e| e.recommendation == Recommendation::Promote)
+        .count();
+    let remove_count = entries
+        .iter()
+        .filter(|e| e.recommendation == Recommendation::Remove)
+        .count();
+    let dupe_count = entries
+        .iter()
+        .filter(|e| e.recommendation == Recommendation::Dupe)
+        .count();
 
     eprintln!(
         "\n{total} rules audited: {promote_count} promote, {narrow_count} narrow, {remove_count} remove, {deny_count} deny, {dupe_count} dupe"
@@ -273,10 +286,16 @@ mod tests {
 
         let entries = audit(&gp, &lp, &[], None).expect("audit");
 
-        let edit_specific = entries.iter().find(|e| e.rule == "Edit(**/*.rs)").expect("edit specific");
+        let edit_specific = entries
+            .iter()
+            .find(|e| e.rule == "Edit(**/*.rs)")
+            .expect("edit specific");
         assert_eq!(edit_specific.recommendation, Recommendation::Dupe);
 
-        let git_specific = entries.iter().find(|e| e.rule == "Bash(git status:*)").expect("git status");
+        let git_specific = entries
+            .iter()
+            .find(|e| e.rule == "Bash(git status:*)")
+            .expect("git status");
         assert_eq!(git_specific.recommendation, Recommendation::Dupe);
 
         // The broader rules keep their own recommendations

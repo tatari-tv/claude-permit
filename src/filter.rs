@@ -19,7 +19,8 @@ where
             .collect()
     };
 
-    let levels: [Box<dyn Fn(&str, &str) -> bool>; 3] = [
+    type Matcher = Box<dyn Fn(&str, &str) -> bool>;
+    let levels: [Matcher; 3] = [
         Box::new(|k: &str, p: &str| k == p),
         Box::new(|k: &str, p: &str| k.starts_with(p)),
         Box::new(|k: &str, p: &str| k.contains(p)),
