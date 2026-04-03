@@ -280,9 +280,12 @@ pub fn classify_rule(rule: &str) -> RiskTier {
         return RiskTier::Moderate;
     }
 
-    if rule == "Read" || rule == "Glob" || rule == "Grep"
-        || rule == "Read(**)" || rule == "Glob(**)" || rule == "Grep(**)"
-    {
+    // Bare Read or Read(**) is carte blanche filesystem access - moderate risk
+    if rule == "Read" || rule == "Read(**)" {
+        return RiskTier::Moderate;
+    }
+
+    if rule == "Glob" || rule == "Grep" || rule == "Glob(**)" || rule == "Grep(**)" {
         return RiskTier::Safe;
     }
 
