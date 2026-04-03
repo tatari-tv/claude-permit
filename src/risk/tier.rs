@@ -40,6 +40,7 @@ pub enum Recommendation {
     Narrow,
     Remove,
     Deny,
+    Dupe,
 }
 
 impl fmt::Display for Recommendation {
@@ -50,8 +51,43 @@ impl fmt::Display for Recommendation {
             Recommendation::Narrow => "narrow",
             Recommendation::Remove => "remove",
             Recommendation::Deny => "deny",
+            Recommendation::Dupe => "dupe",
         })
     }
+}
+
+/// Returns true if `broad` covers everything `narrow` covers — i.e., `narrow` is redundant.
+///
+/// Two cases:
+/// - Bash: `Bash(X:*)` subsumes `Bash(Y:*)` when Y starts with "X " (word-boundary prefix)
+/// - File tools: `Tool(**)` subsumes `Tool(<any other pattern>)`
+pub fn subsumes(broad: &str, narrow: &str) -> bool {
+    if broad == narrow {
+        return false;
+    }
+
+    // Bash subsumption: Bash(X:*) subsumes Bash(Y:*) when Y starts with "X "
+    if let (Some(bx), Some(ny)) = (extract_bash_pattern(broad), extract_bash_pattern(narrow)) {
+        return ny.starts_with(&format!("{bx} "));
+    }
+
+    // File-tool subsumption: Tool(**) subsumes Tool(<anything else>)
+    if let (Some((bt, bp)), Some((nt, np))) = (split_paren(broad), split_paren(narrow)) {
+        if bt == nt && bp == "**" && np != "**" {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Split "Tool(pattern)" into ("Tool", "pattern"), or None.
+fn split_paren(rule: &str) -> Option<(&str, &str)> {
+    let i = rule.find('(')?;
+    if !rule.ends_with(')') {
+        return None;
+    }
+    Some((&rule[..i], &rule[i + 1..rule.len() - 1]))
 }
 
 /// Patterns that should always be denied.
@@ -310,6 +346,21 @@ fn classify_bash_command(cmd: &str) -> RiskTier {
         return RiskTier::Dangerous;
     }
 
+    // Env var assignments (e.g. GH_TOKEN="..." cmd) are one-time specific invocations
+    if starts_with_env_var(cmd) {
+        return RiskTier::Dangerous;
+    }
+
+    // git -C <path> is a path-locked invocation that shouldn't be permanently allowed
+    if cmd.starts_with("git -C ") {
+        return RiskTier::Dangerous;
+    }
+
+    // bash -c is an arbitrary shell escape and should not be permanently allowed
+    if cmd.starts_with("bash -c") {
+        return RiskTier::Dangerous;
+    }
+
     // Check safe commands (longest prefix match)
     if matches_command_list(cmd, SAFE_BASH_COMMANDS) {
         return RiskTier::Safe;
@@ -322,6 +373,24 @@ fn classify_bash_command(cmd: &str) -> RiskTier {
 
     // Unknown command - default to moderate
     RiskTier::Moderate
+}
+
+/// Returns true if the command starts with a shell env var assignment (e.g. `FOO=bar cmd`).
+fn starts_with_env_var(cmd: &str) -> bool {
+    // Match VAR= or VAR="..." at the start, where VAR is [A-Z_][A-Z0-9_]*
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    // Must start with an uppercase letter or underscore
+    if i >= bytes.len() || !(bytes[i].is_ascii_uppercase() || bytes[i] == b'_') {
+        return false;
+    }
+    i += 1;
+    // Consume rest of VAR name
+    while i < bytes.len() && (bytes[i].is_ascii_uppercase() || bytes[i].is_ascii_digit() || bytes[i] == b'_') {
+        i += 1;
+    }
+    // Must be followed by '='
+    i < bytes.len() && bytes[i] == b'='
 }
 
 fn classify_mcp_tool(tool: &str) -> RiskTier {
@@ -540,5 +609,51 @@ mod tests {
     #[test]
     fn not_broad_specific_git() {
         assert!(!is_overly_broad("Bash(git status:*)"));
+    }
+
+    // --- Env var prefix tests ---
+
+    #[test]
+    fn env_var_prefix_is_dangerous() {
+        assert_eq!(classify_rule("Bash(GH_TOKEN=\"$TOKEN\" gh pr view:*)"), RiskTier::Dangerous);
+        assert_eq!(classify_rule("Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id\" git push:*)"), RiskTier::Dangerous);
+        assert_eq!(classify_rule("Bash(API_KEY=\"abc\" curl:*)"), RiskTier::Dangerous);
+    }
+
+    #[test]
+    fn lowercase_var_is_not_env_var() {
+        // lowercase assignments are not detected (conservative)
+        assert_ne!(classify_rule("Bash(foo=bar cmd:*)"), RiskTier::Dangerous);
+    }
+
+    #[test]
+    fn starts_with_env_var_fn() {
+        assert!(starts_with_env_var("GH_TOKEN=\"x\" cmd"));
+        assert!(starts_with_env_var("GIT_SSH_COMMAND=ssh git"));
+        assert!(starts_with_env_var("_VAR=1 cmd"));
+        assert!(!starts_with_env_var("git status"));
+        assert!(!starts_with_env_var("gh pr view"));
+    }
+
+    // --- git -C tests ---
+
+    #[test]
+    fn git_dash_c_is_dangerous() {
+        assert_eq!(classify_rule("Bash(git -C /some/path push:*)"), RiskTier::Dangerous);
+        assert_eq!(classify_rule("Bash(git -C ~/repos/foo status:*)"), RiskTier::Dangerous);
+    }
+
+    #[test]
+    fn git_without_dash_c_not_affected() {
+        assert_eq!(classify_rule("Bash(git status:*)"), RiskTier::Safe);
+        assert_eq!(classify_rule("Bash(git push:*)"), RiskTier::Moderate);
+    }
+
+    // --- bash -c tests ---
+
+    #[test]
+    fn bash_dash_c_is_dangerous() {
+        assert_eq!(classify_rule("Bash(bash -c 'echo hi':*)"), RiskTier::Dangerous);
+        assert_eq!(classify_rule("Bash(bash -c:*)"), RiskTier::Dangerous);
     }
 }

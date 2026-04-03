@@ -4,6 +4,7 @@ use eyre::Result;
 use serde::Serialize;
 
 use crate::db::EventStore;
+use crate::filter::filter_by_patterns;
 use crate::pager::page_output;
 use crate::risk::{RiskTier, classify_rule};
 
@@ -153,8 +154,9 @@ fn extract_domain(url: &str) -> Option<String> {
 }
 
 /// Run the suggest command with output formatting.
-pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, format: &str, pager: Option<&str>) -> Result<()> {
+pub fn run_suggest(store: &EventStore, threshold: u32, min_sessions: u32, patterns: &[String], format: &str, pager: Option<&str>) -> Result<()> {
     let entries = suggest(store, threshold, min_sessions)?;
+    let entries = filter_by_patterns(entries, patterns, |e| e.suggested_rule.as_str());
 
     if entries.is_empty() {
         println!("No patterns meet the threshold ({threshold} observations, {min_sessions} sessions).");

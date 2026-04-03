@@ -31,7 +31,7 @@ pub fn run_apply(
     backup: bool,
 ) -> Result<()> {
     // Run audit to get recommendations
-    let entries = audit(settings_path, settings_local_path, None)?;
+    let entries = audit(settings_path, settings_local_path, &[], None)?;
 
     // Partition entries by recommendation
     let summary = build_summary(&entries, filter);

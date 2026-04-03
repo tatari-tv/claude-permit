@@ -2,8 +2,9 @@ use eyre::Result;
 use serde::Serialize;
 use std::path::Path;
 
+use crate::filter::filter_by_patterns;
 use crate::pager::page_output;
-use crate::risk::{Recommendation, RiskTier, classify_rule, recommend};
+use crate::risk::{Recommendation, RiskTier, classify_rule, recommend, subsumes};
 use crate::settings::load_settings;
 
 /// A single row in the audit output.
@@ -20,6 +21,7 @@ pub struct AuditEntry {
 pub fn audit(
     settings_path: &Path,
     settings_local_path: &Path,
+    patterns: &[String],
     risk_filter: Option<RiskTier>,
 ) -> Result<Vec<AuditEntry>> {
     let rules = load_settings(settings_path, settings_local_path)?;
@@ -39,10 +41,34 @@ pub fn audit(
         })
         .collect();
 
-    // Apply risk filter if specified
-    if let Some(filter) = risk_filter {
-        entries.retain(|e| e.risk == filter);
+    // Mark rules made redundant by a broader rule in the same list (allow or deny).
+    // Cross-list matches are intentional: deny rules carve out from a broad allow.
+    // Permanent-deny rules (Recommendation::Deny) are never overridden.
+    let snapshots: Vec<(String, String)> = entries
+        .iter()
+        .map(|e| (e.list.clone(), e.rule.clone()))
+        .collect();
+    for i in 0..entries.len() {
+        if entries[i].recommendation == Recommendation::Deny {
+            continue;
+        }
+        let covered = snapshots.iter().enumerate().any(|(j, (list, rule))| {
+            j != i && *list == entries[i].list && subsumes(rule, &entries[i].rule)
+        });
+        if covered {
+            entries[i].recommendation = Recommendation::Dupe;
+        }
     }
+
+    // Apply pattern filter (exact -> prefix -> substring cascade)
+    let entries = filter_by_patterns(entries, patterns, |e| e.rule.as_str());
+
+    // Apply risk filter on the already-narrowed set
+    let entries = if let Some(filter) = risk_filter {
+        entries.into_iter().filter(|e| e.risk == filter).collect()
+    } else {
+        entries
+    };
 
     Ok(entries)
 }
@@ -90,11 +116,12 @@ pub fn format_json(entries: &[AuditEntry]) -> Result<String> {
 pub fn run_audit(
     settings_path: &Path,
     settings_local_path: &Path,
+    patterns: &[String],
     format: &str,
     risk_filter: Option<RiskTier>,
     pager: Option<&str>,
 ) -> Result<()> {
-    let entries = audit(settings_path, settings_local_path, risk_filter)?;
+    let entries = audit(settings_path, settings_local_path, patterns, risk_filter)?;
 
     match format {
         "json" => println!("{}", format_json(&entries)?),
@@ -129,9 +156,13 @@ pub fn run_audit(
         .iter()
         .filter(|e| e.recommendation == Recommendation::Remove)
         .count();
+    let dupe_count = entries
+        .iter()
+        .filter(|e| e.recommendation == Recommendation::Dupe)
+        .count();
 
     eprintln!(
-        "\n{total} rules audited: {promote_count} promote, {narrow_count} narrow, {remove_count} remove, {deny_count} deny"
+        "\n{total} rules audited: {promote_count} promote, {narrow_count} narrow, {remove_count} remove, {deny_count} deny, {dupe_count} dupe"
     );
 
     Ok(())
@@ -159,7 +190,7 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(sudo rm:*)","WebSearch"]}}"#,
         );
 
-        let entries = audit(&gp, &lp, None).expect("audit");
+        let entries = audit(&gp, &lp, &[], None).expect("audit");
         assert_eq!(entries.len(), 5);
 
         // ls is safe
@@ -186,7 +217,7 @@ mod tests {
             r#"{"permissions":{}}"#,
         );
 
-        let entries = audit(&gp, &lp, Some(RiskTier::Dangerous)).expect("audit");
+        let entries = audit(&gp, &lp, &[], Some(RiskTier::Dangerous)).expect("audit");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].rule, "Bash(sudo rm:*)");
     }
@@ -235,7 +266,30 @@ mod tests {
             r#"{"permissions":{}}"#,
         );
 
-        let entries = audit(&gp, &lp, None).expect("audit");
+        let entries = audit(&gp, &lp, &[], None).expect("audit");
         assert_eq!(entries[0].recommendation, Recommendation::Narrow);
+    }
+
+    #[test]
+    fn redundant_when_broader_rule_exists() {
+        let dir = TempDir::new().expect("temp");
+        // Edit(**) is broader than Edit(**/*.rs) — the specific one should be redundant
+        let (gp, lp) = write_settings(
+            dir.path(),
+            r#"{"permissions":{"allow":["Edit(**)", "Edit(**/*.rs)", "Bash(git:*)", "Bash(git status:*)"]}}"#,
+            r#"{"permissions":{}}"#,
+        );
+
+        let entries = audit(&gp, &lp, &[], None).expect("audit");
+
+        let edit_specific = entries.iter().find(|e| e.rule == "Edit(**/*.rs)").expect("edit specific");
+        assert_eq!(edit_specific.recommendation, Recommendation::Dupe);
+
+        let git_specific = entries.iter().find(|e| e.rule == "Bash(git status:*)").expect("git status");
+        assert_eq!(git_specific.recommendation, Recommendation::Dupe);
+
+        // The broader rules keep their own recommendations
+        let edit_broad = entries.iter().find(|e| e.rule == "Edit(**)").expect("edit broad");
+        assert_ne!(edit_broad.recommendation, Recommendation::Dupe);
     }
 }
