@@ -140,8 +140,9 @@ fn run() -> Result<()> {
             let do_promote = promote || all;
             let do_remove = remove || all;
             let do_deny = deny || all;
+            let do_dupe = all;
 
-            if !do_promote && !do_remove && !do_deny {
+            if !do_promote && !do_remove && !do_deny && !do_dupe {
                 eprintln!("No filter specified. Use --promote, --remove, --deny, or --all.");
                 std::process::exit(1);
             }
@@ -152,8 +153,9 @@ fn run() -> Result<()> {
                 promote: do_promote,
                 remove: do_remove,
                 deny: do_deny,
+                dupe: do_dupe,
             };
-            cmd::run_apply(&sp, &slp, &filter, yes, !no_backup)?;
+            claude_permit::cmd::apply::run_apply(&sp, &slp, &filter, yes, !no_backup)?;
         }
     }
 
