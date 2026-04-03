@@ -35,6 +35,10 @@ pub enum Command {
         /// Filter by risk tier: safe, moderate, dangerous
         #[arg(long)]
         risk: Option<String>,
+
+        /// Rule patterns to filter output (exact, prefix, or substring match)
+        #[arg(value_name = "PATTERN")]
+        patterns: Vec<String>,
     },
 
     /// Suggest promotions based on usage patterns
@@ -50,6 +54,10 @@ pub enum Command {
         /// Output format: table, json, markdown
         #[arg(long, default_value = "table")]
         format: String,
+
+        /// Rule patterns to filter output (exact, prefix, or substring match)
+        #[arg(value_name = "PATTERN")]
+        patterns: Vec<String>,
     },
 
     /// Session summary of permission activity

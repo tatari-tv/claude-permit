@@ -95,20 +95,22 @@ fn run() -> Result<()> {
             settings_local,
             format,
             risk,
+            patterns,
         } => {
             let sp = settings.unwrap_or_else(settings_path);
             let slp = settings_local.unwrap_or_else(settings_local_path);
             let risk_filter = risk.and_then(|r| claude_permit::risk::RiskTier::from_str_opt(&r));
-            cmd::run_audit(&sp, &slp, &format, risk_filter, config.pager.as_deref())?;
+            cmd::run_audit(&sp, &slp, &patterns, &format, risk_filter, config.pager.as_deref())?;
         }
         Command::Suggest {
             threshold,
             sessions,
             format,
+            patterns,
         } => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            cmd::run_suggest(&store, threshold, sessions, &format, config.pager.as_deref())?;
+            cmd::run_suggest(&store, threshold, sessions, &patterns, &format, config.pager.as_deref())?;
         }
         Command::Report { session, format } => {
             let db_path = EventStore::default_path()?;
