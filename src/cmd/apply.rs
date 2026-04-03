@@ -93,15 +93,18 @@ pub fn apply_entries(
     let mut global: Value = serde_json::from_str(&global_content).context("Failed to parse settings.json")?;
     let mut local: Value = serde_json::from_str(&local_content).context("Failed to parse settings.local.json")?;
 
-    if backup {
+    if backup && which::which("rkvr").is_ok() {
         let mut args = vec![settings_path.to_str().expect("valid path")];
         if settings_local_path.exists() {
             args.push(settings_local_path.to_str().expect("valid path"));
         }
-        match std::process::Command::new("rkvr").arg("bkup").args(&args).status() {
-            Ok(status) if status.success() => {}
-            Ok(_) => eprintln!("warning: rkvr bkup failed; continuing without backup"),
-            Err(_) => eprintln!("warning: rkvr not found; continuing without backup"),
+        let status = std::process::Command::new("rkvr")
+            .arg("bkup")
+            .args(&args)
+            .status()
+            .context("Failed to run rkvr bkup")?;
+        if !status.success() {
+            bail!("rkvr bkup failed");
         }
     }
 
