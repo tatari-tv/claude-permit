@@ -453,7 +453,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&lp).expect("read"), local_json);
     }
 
-
     #[test]
     fn preserves_non_permission_fields() {
         let dir = TempDir::new().expect("temp");
