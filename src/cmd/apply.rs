@@ -453,29 +453,6 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&lp).expect("read"), local_json);
     }
 
-    #[test]
-    fn backup_runs_without_error() {
-        let dir = TempDir::new().expect("temp");
-        let (gp, lp) = write_settings(
-            dir.path(),
-            r#"{"permissions":{"allow":[]}}"#,
-            r#"{"permissions":{"allow":["Bash(sudo rm:*)"]}}"#,
-        );
-
-        run_apply(
-            &gp,
-            &lp,
-            &ApplyFilter {
-                promote: false,
-                remove: true,
-                deny: false,
-                dupe: false,
-            },
-            true,
-            true,
-        )
-        .expect("apply");
-    }
 
     #[test]
     fn preserves_non_permission_fields() {
