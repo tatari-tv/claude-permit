@@ -32,9 +32,14 @@ pub enum Command {
         #[arg(long, default_value = "table")]
         format: String,
 
-        /// Filter by risk tier: safe, moderate, dangerous
-        #[arg(long)]
+        /// Filter by risk tier: safe, moderate, dangerous (cannot be combined with --apply)
+        #[arg(long, conflicts_with = "apply")]
         risk: Option<String>,
+
+        /// Apply recommendations and write changes. Optionally specify actions:
+        /// promote, remove, deny, dupe (default: all). Cannot be combined with --risk.
+        #[arg(long, value_name = "ACTION", num_args = 0.., conflicts_with = "risk")]
+        apply: Option<Vec<String>>,
 
         /// Rule patterns to filter output (exact, prefix, or substring match)
         #[arg(value_name = "PATTERN")]

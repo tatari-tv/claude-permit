@@ -2,6 +2,7 @@ use eyre::Result;
 use serde::Serialize;
 use std::path::Path;
 
+use crate::cmd::apply::{apply_entries, parse_apply_filter};
 use crate::filter::filter_by_patterns;
 use crate::pager::page_output;
 use crate::risk::{Recommendation, RiskTier, classify_rule, recommend, subsumes};
@@ -119,6 +120,7 @@ pub fn run_audit(
     patterns: &[String],
     format: &str,
     risk_filter: Option<RiskTier>,
+    apply: Option<&[String]>,
     pager: Option<&str>,
 ) -> Result<()> {
     let entries = audit(settings_path, settings_local_path, patterns, risk_filter)?;
@@ -138,32 +140,21 @@ pub fn run_audit(
         _ => page_output(&format_table(&entries), pager),
     }
 
-    // Summary
     let total = entries.len();
-    let deny_count = entries
-        .iter()
-        .filter(|e| e.recommendation == Recommendation::Deny)
-        .count();
-    let narrow_count = entries
-        .iter()
-        .filter(|e| e.recommendation == Recommendation::Narrow)
-        .count();
-    let promote_count = entries
-        .iter()
-        .filter(|e| e.recommendation == Recommendation::Promote)
-        .count();
-    let remove_count = entries
-        .iter()
-        .filter(|e| e.recommendation == Recommendation::Remove)
-        .count();
-    let dupe_count = entries
-        .iter()
-        .filter(|e| e.recommendation == Recommendation::Dupe)
-        .count();
+    let deny_count = entries.iter().filter(|e| e.recommendation == Recommendation::Deny).count();
+    let narrow_count = entries.iter().filter(|e| e.recommendation == Recommendation::Narrow).count();
+    let promote_count = entries.iter().filter(|e| e.recommendation == Recommendation::Promote).count();
+    let remove_count = entries.iter().filter(|e| e.recommendation == Recommendation::Remove).count();
+    let dupe_count = entries.iter().filter(|e| e.recommendation == Recommendation::Dupe).count();
 
     eprintln!(
         "\n{total} rules audited: {promote_count} promote, {narrow_count} narrow, {remove_count} remove, {deny_count} deny, {dupe_count} dupe"
     );
+
+    if let Some(actions) = apply {
+        let filter = parse_apply_filter(actions)?;
+        apply_entries(&entries, &filter, settings_path, settings_local_path, true, true)?;
+    }
 
     Ok(())
 }

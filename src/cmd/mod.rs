@@ -7,7 +7,6 @@ mod log;
 mod report;
 mod suggest;
 
-pub use apply::run_apply;
 pub use audit::run_audit;
 pub use check::run_check;
 pub use clean::run_clean;

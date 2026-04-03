@@ -1,5 +1,5 @@
 use colored::*;
-use eyre::{Context, Result};
+use eyre::{Context, Result, bail};
 use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
@@ -12,6 +12,34 @@ pub struct ApplyFilter {
     pub promote: bool,
     pub remove: bool,
     pub deny: bool,
+    pub dupe: bool,
+}
+
+impl ApplyFilter {
+    /// All actionable recommendations.
+    pub fn all() -> Self {
+        Self { promote: true, remove: true, deny: true, dupe: true }
+    }
+}
+
+/// Parse action words from CLI into an ApplyFilter.
+/// Empty slice means all actionable.
+pub fn parse_apply_filter(actions: &[String]) -> Result<ApplyFilter> {
+    if actions.is_empty() {
+        return Ok(ApplyFilter::all());
+    }
+    for action in actions {
+        match action.as_str() {
+            "promote" | "remove" | "deny" | "dupe" => {}
+            other => bail!("Unknown apply action '{}'. Valid: promote, remove, deny, dupe", other),
+        }
+    }
+    Ok(ApplyFilter {
+        promote: actions.iter().any(|a| a == "promote"),
+        remove: actions.iter().any(|a| a == "remove"),
+        deny: actions.iter().any(|a| a == "deny"),
+        dupe: actions.iter().any(|a| a == "dupe"),
+    })
 }
 
 /// Summary of what was (or would be) applied.
@@ -19,24 +47,21 @@ pub struct ApplySummary {
     pub promoted: Vec<String>,
     pub removed: Vec<String>,
     pub denied: Vec<String>,
+    pub duped: Vec<(String, String)>, // (rule, source)
     pub narrow_skipped: usize,
 }
 
-/// Run the apply command.
-pub fn run_apply(
+/// Apply recommendations from already-audited entries.
+pub fn apply_entries(
+    entries: &[AuditEntry],
+    filter: &ApplyFilter,
     settings_path: &Path,
     settings_local_path: &Path,
-    filter: &ApplyFilter,
-    write: bool,
     backup: bool,
+    write: bool,
 ) -> Result<()> {
-    // Run audit to get recommendations
-    let entries = audit(settings_path, settings_local_path, &[], None)?;
-
-    // Partition entries by recommendation
-    let summary = build_summary(&entries, filter);
-
-    let total = summary.promoted.len() + summary.removed.len() + summary.denied.len();
+    let summary = build_summary(entries, filter);
+    let total = summary.promoted.len() + summary.removed.len() + summary.denied.len() + summary.duped.len();
 
     if total == 0 {
         println!("No actionable recommendations match the selected filters.");
@@ -46,15 +71,13 @@ pub fn run_apply(
         return Ok(());
     }
 
-    // Display what will happen
     print_plan(&summary, write);
 
     if !write {
-        println!("\n{}", "Pass --yes to apply these changes.".yellow().bold());
+        println!("\n{}", "Pass --apply to write these changes.".yellow().bold());
         return Ok(());
     }
 
-    // Load raw JSON values
     let global_content = std::fs::read_to_string(settings_path).context("Failed to read settings.json")?;
     let local_content = if settings_local_path.exists() {
         std::fs::read_to_string(settings_local_path).context("Failed to read settings.local.json")?
@@ -65,7 +88,6 @@ pub fn run_apply(
     let mut global: Value = serde_json::from_str(&global_content).context("Failed to parse settings.json")?;
     let mut local: Value = serde_json::from_str(&local_content).context("Failed to parse settings.local.json")?;
 
-    // Create backups
     if backup {
         let mut args = vec![settings_path.to_str().expect("valid path")];
         if settings_local_path.exists() {
@@ -77,21 +99,18 @@ pub fn run_apply(
             .status()
             .context("Failed to run rkvr bkup")?;
         if !status.success() {
-            eyre::bail!("rkvr bkup failed");
+            bail!("rkvr bkup failed");
         }
     }
 
-    // Apply operations
     let global_allow = get_allow_array(&mut global);
     let local_allow = get_allow_array(&mut local);
 
-    // Build a set of what's already in global allow for dedup
     let global_existing: HashSet<String> = global_allow
         .iter()
         .filter_map(|v| v.as_str().map(|s| s.to_string()))
         .collect();
 
-    // Promote: add to global (if not already there), remove from local
     for rule in &summary.promoted {
         if !global_existing.contains(rule) {
             global_allow.push(Value::String(rule.clone()));
@@ -99,18 +118,23 @@ pub fn run_apply(
         remove_from_array(local_allow, rule);
     }
 
-    // Remove: delete from local allow
     for rule in &summary.removed {
         remove_from_array(local_allow, rule);
     }
 
-    // Deny: remove from whichever allow list contains it
     for rule in &summary.denied {
         remove_from_array(global_allow, rule);
         remove_from_array(local_allow, rule);
     }
 
-    // Write back
+    for (rule, source) in &summary.duped {
+        if source == "global" {
+            remove_from_array(global_allow, rule);
+        } else {
+            remove_from_array(local_allow, rule);
+        }
+    }
+
     let global_out = serde_json::to_string_pretty(&global)?;
     let local_out = serde_json::to_string_pretty(&local)?;
 
@@ -119,11 +143,12 @@ pub fn run_apply(
 
     println!();
     println!(
-        "{} Applied {} promote, {} remove, {} deny operations.",
+        "{} Applied {} promote, {} remove, {} deny, {} dupe.",
         "Done.".green().bold(),
         summary.promoted.len(),
         summary.removed.len(),
         summary.denied.len(),
+        summary.duped.len(),
     );
 
     if !summary.denied.is_empty() {
@@ -136,10 +161,23 @@ pub fn run_apply(
     Ok(())
 }
 
+/// Convenience wrapper used by tests: re-audits then applies.
+pub fn run_apply(
+    settings_path: &Path,
+    settings_local_path: &Path,
+    filter: &ApplyFilter,
+    write: bool,
+    backup: bool,
+) -> Result<()> {
+    let entries = audit(settings_path, settings_local_path, &[], None)?;
+    apply_entries(&entries, filter, settings_path, settings_local_path, backup, write)
+}
+
 fn build_summary(entries: &[AuditEntry], filter: &ApplyFilter) -> ApplySummary {
     let mut promoted = Vec::new();
     let mut removed = Vec::new();
     let mut denied = Vec::new();
+    let mut duped = Vec::new();
     let mut narrow_skipped = 0;
 
     for entry in entries {
@@ -156,6 +194,9 @@ fn build_summary(entries: &[AuditEntry], filter: &ApplyFilter) -> ApplySummary {
             Recommendation::Deny if filter.deny => {
                 denied.push(entry.rule.clone());
             }
+            Recommendation::Dupe if filter.dupe => {
+                duped.push((entry.rule.clone(), entry.source.clone()));
+            }
             Recommendation::Narrow => {
                 narrow_skipped += 1;
             }
@@ -163,49 +204,43 @@ fn build_summary(entries: &[AuditEntry], filter: &ApplyFilter) -> ApplySummary {
         }
     }
 
-    ApplySummary {
-        promoted,
-        removed,
-        denied,
-        narrow_skipped,
-    }
+    ApplySummary { promoted, removed, denied, duped, narrow_skipped }
 }
 
 fn print_plan(summary: &ApplySummary, write: bool) {
     let verb = if write { "Applying" } else { "Would apply" };
     println!(
-        "{} {} promote, {} remove, {} deny operations:",
+        "{} {} promote, {} remove, {} deny, {} dupe:",
         verb,
         summary.promoted.len(),
         summary.removed.len(),
         summary.denied.len(),
+        summary.duped.len(),
     );
 
     if !summary.promoted.is_empty() {
-        println!(
-            "\n{} {} rules",
-            "PROMOTE (local -> global):".cyan().bold(),
-            summary.promoted.len()
-        );
+        println!("\n{} {} rules", "PROMOTE (local -> global):".cyan().bold(), summary.promoted.len());
         print_rules(&summary.promoted, "+", 10);
     }
 
     if !summary.removed.is_empty() {
-        println!(
-            "\n{} {} rules",
-            "REMOVE (from local):".red().bold(),
-            summary.removed.len()
-        );
+        println!("\n{} {} rules", "REMOVE (from local):".red().bold(), summary.removed.len());
         print_rules(&summary.removed, "-", 10);
     }
 
     if !summary.denied.is_empty() {
-        println!(
-            "\n{} {} rules",
-            "DENY (remove from allow):".red().bold(),
-            summary.denied.len()
-        );
+        println!("\n{} {} rules", "DENY (remove from allow):".red().bold(), summary.denied.len());
         print_rules(&summary.denied, "x", 10);
+    }
+
+    if !summary.duped.is_empty() {
+        println!("\n{} {} rules", "DUPE (covered by broader rule):".yellow().bold(), summary.duped.len());
+        for (rule, source) in summary.duped.iter().take(10) {
+            println!("  - {rule}  [{source}]");
+        }
+        if summary.duped.len() > 10 {
+            println!("  ... ({} more)", summary.duped.len() - 10);
+        }
     }
 
     if summary.narrow_skipped > 0 {
@@ -265,33 +300,16 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(ls:*)","Bash(tree:*)"]}}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: true,
-            remove: false,
-            deny: false,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter { promote: true, remove: false, deny: false, dupe: false }, true, false).expect("apply");
 
         let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
         let local: Value = serde_json::from_str(&std::fs::read_to_string(&lp).expect("read")).expect("parse");
 
-        let global_allow: Vec<&str> = global["permissions"]["allow"]
-            .as_array()
-            .expect("array")
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
-        let local_allow: Vec<&str> = local["permissions"]["allow"]
-            .as_array()
-            .expect("array")
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let global_allow: Vec<&str> = global["permissions"]["allow"].as_array().expect("array").iter().filter_map(|v| v.as_str()).collect();
+        let local_allow: Vec<&str> = local["permissions"]["allow"].as_array().expect("array").iter().filter_map(|v| v.as_str()).collect();
 
-        // ls and tree are safe -> should be promoted to global
         assert!(global_allow.contains(&"Bash(ls:*)"));
         assert!(global_allow.contains(&"Bash(tree:*)"));
-        // and removed from local
         assert!(!local_allow.contains(&"Bash(ls:*)"));
         assert!(!local_allow.contains(&"Bash(tree:*)"));
     }
@@ -305,24 +323,12 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(sudo rm:*)","Bash(ls:*)"]}}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: false,
-            remove: true,
-            deny: false,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter { promote: false, remove: true, deny: false, dupe: false }, true, false).expect("apply");
 
         let local: Value = serde_json::from_str(&std::fs::read_to_string(&lp).expect("read")).expect("parse");
-        let local_allow: Vec<&str> = local["permissions"]["allow"]
-            .as_array()
-            .expect("array")
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let local_allow: Vec<&str> = local["permissions"]["allow"].as_array().expect("array").iter().filter_map(|v| v.as_str()).collect();
 
-        // sudo rm should be removed
         assert!(!local_allow.contains(&"Bash(sudo rm:*)"));
-        // ls should remain (it's safe, not dangerous)
         assert!(local_allow.contains(&"Bash(ls:*)"));
     }
 
@@ -335,24 +341,14 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: true,
-            remove: false,
-            deny: false,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter { promote: true, remove: false, deny: false, dupe: false }, true, false).expect("apply");
 
         let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
         let local: Value = serde_json::from_str(&std::fs::read_to_string(&lp).expect("read")).expect("parse");
 
-        // Should not duplicate in global
-        let global_allow = global["permissions"]["allow"].as_array().expect("array");
-        let count = global_allow.iter().filter(|v| v.as_str() == Some("Bash(ls:*)")).count();
+        let count = global["permissions"]["allow"].as_array().expect("array").iter().filter(|v| v.as_str() == Some("Bash(ls:*)")).count();
         assert_eq!(count, 1);
-
-        // Should be removed from local
-        let local_allow = local["permissions"]["allow"].as_array().expect("array");
-        assert!(!local_allow.iter().any(|v| v.as_str() == Some("Bash(ls:*)")));
+        assert!(!local["permissions"]["allow"].as_array().expect("array").iter().any(|v| v.as_str() == Some("Bash(ls:*)")));
     }
 
     #[test]
@@ -362,15 +358,8 @@ mod tests {
         let local_json = r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#;
         let (gp, lp) = write_settings(dir.path(), global_json, local_json);
 
-        let filter = ApplyFilter {
-            promote: true,
-            remove: true,
-            deny: true,
-        };
-        // write=false means dry run
-        run_apply(&gp, &lp, &filter, false, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter::all(), false, false).expect("apply");
 
-        // Files should be unchanged
         assert_eq!(std::fs::read_to_string(&gp).expect("read"), global_json);
         assert_eq!(std::fs::read_to_string(&lp).expect("read"), local_json);
     }
@@ -384,13 +373,7 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(sudo rm:*)"]}}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: false,
-            remove: true,
-            deny: false,
-        };
-        // rkvr must be available in PATH; this is an integration smoke test
-        run_apply(&gp, &lp, &filter, true, true).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter { promote: false, remove: true, deny: false, dupe: false }, true, true).expect("apply");
     }
 
     #[test]
@@ -402,12 +385,7 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(ls:*)"]},"enableAllProjectMcpServers":true}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: true,
-            remove: false,
-            deny: false,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter { promote: true, remove: false, deny: false, dupe: false }, true, false).expect("apply");
 
         let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
         assert_eq!(global["env"]["FOO"], "bar");
@@ -427,17 +405,10 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(sudo rm:*)","Bash(ls:*)"]}}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: false,
-            remove: false,
-            deny: false,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter { promote: false, remove: false, deny: false, dupe: false }, true, false).expect("apply");
 
-        // Nothing should change
         let local: Value = serde_json::from_str(&std::fs::read_to_string(&lp).expect("read")).expect("parse");
-        let local_allow = local["permissions"]["allow"].as_array().expect("array");
-        assert_eq!(local_allow.len(), 2);
+        assert_eq!(local["permissions"]["allow"].as_array().expect("array").len(), 2);
     }
 
     #[test]
@@ -449,17 +420,10 @@ mod tests {
             r#"{"permissions":{"allow":[]}}"#,
         );
 
-        let filter = ApplyFilter {
-            promote: true,
-            remove: true,
-            deny: true,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter::all(), true, false).expect("apply");
 
-        // Deny-list rules should not be touched - they're already denied
         let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
-        let deny = global["permissions"]["deny"].as_array().expect("array");
-        assert_eq!(deny.len(), 2, "deny list should be unchanged");
+        assert_eq!(global["permissions"]["deny"].as_array().expect("array").len(), 2, "deny list should be unchanged");
     }
 
     #[test]
@@ -468,14 +432,46 @@ mod tests {
         let gp = dir.path().join("settings.json");
         let lp = dir.path().join("settings.local.json");
         std::fs::write(&gp, r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#).expect("write");
-        // local file does not exist
 
-        let filter = ApplyFilter {
-            promote: true,
-            remove: true,
-            deny: true,
-        };
-        run_apply(&gp, &lp, &filter, true, false).expect("apply");
-        // Should not panic
+        run_apply(&gp, &lp, &ApplyFilter::all(), true, false).expect("apply");
+    }
+
+    #[test]
+    fn dupe_removed_from_correct_file() {
+        let dir = TempDir::new().expect("temp");
+        // Edit(**) is broader - Edit(**/*.rs) is a dupe, lives in global
+        let (gp, lp) = write_settings(
+            dir.path(),
+            r#"{"permissions":{"allow":["Edit(**)", "Edit(**/*.rs)"]}}"#,
+            r#"{"permissions":{"allow":[]}}"#,
+        );
+
+        run_apply(&gp, &lp, &ApplyFilter { promote: false, remove: false, deny: false, dupe: true }, true, false).expect("apply");
+
+        let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
+        let global_allow: Vec<&str> = global["permissions"]["allow"].as_array().expect("array").iter().filter_map(|v| v.as_str()).collect();
+
+        assert!(global_allow.contains(&"Edit(**)"));
+        assert!(!global_allow.contains(&"Edit(**/*.rs)"), "dupe should be removed");
+    }
+
+    #[test]
+    fn parse_apply_filter_empty_is_all() {
+        let f = parse_apply_filter(&[]).expect("parse");
+        assert!(f.promote && f.remove && f.deny && f.dupe);
+    }
+
+    #[test]
+    fn parse_apply_filter_specific() {
+        let f = parse_apply_filter(&["promote".to_string(), "dupe".to_string()]).expect("parse");
+        assert!(f.promote);
+        assert!(!f.remove);
+        assert!(!f.deny);
+        assert!(f.dupe);
+    }
+
+    #[test]
+    fn parse_apply_filter_unknown_errors() {
+        assert!(parse_apply_filter(&["foo".to_string()]).is_err());
     }
 }

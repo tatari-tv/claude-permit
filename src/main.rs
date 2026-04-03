@@ -95,12 +95,13 @@ fn run() -> Result<()> {
             settings_local,
             format,
             risk,
+            apply,
             patterns,
         } => {
             let sp = settings.unwrap_or_else(settings_path);
             let slp = settings_local.unwrap_or_else(settings_local_path);
             let risk_filter = risk.and_then(|r| claude_permit::risk::RiskTier::from_str_opt(&r));
-            cmd::run_audit(&sp, &slp, &patterns, &format, risk_filter, config.pager.as_deref())?;
+            cmd::run_audit(&sp, &slp, &patterns, &format, risk_filter, apply.as_deref(), config.pager.as_deref())?;
         }
         Command::Suggest {
             threshold,
