@@ -78,8 +78,8 @@ pub fn run_log(store: &EventStore, enforce_deny: bool, extra_deny_patterns: &[St
 }
 
 fn deny_reason(cmd: &str) -> String {
-    if cmd.starts_with("rm -rf") || cmd.starts_with("rm -r ") {
-        format!("'{cmd}' is permanently denied; use 'rkvr rmrf' instead")
+    if cmd.starts_with("rm ") {
+        format!("'{cmd}' is permanently denied; rm is dangerous")
     } else if cmd.starts_with("cd ") && cmd.contains("&&") {
         format!("'{cmd}' is permanently denied; compound cd commands are a security risk")
     } else if cmd.starts_with("git tag -d") {
@@ -111,9 +111,9 @@ mod tests {
     }
 
     #[test]
-    fn deny_reason_rm_rf() {
-        let reason = deny_reason("rm -rf /tmp");
-        assert!(reason.contains("rkvr rmrf"));
+    fn deny_reason_rm() {
+        assert!(deny_reason("rm -rf /tmp").contains("rm is dangerous"));
+        assert!(deny_reason("rm /tmp/file").contains("rm is dangerous"));
     }
 
     #[test]

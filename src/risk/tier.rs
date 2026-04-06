@@ -93,8 +93,7 @@ const PERMANENT_DENY: &[&str] = &[
     "git tag -d",
     "git push * :refs/tags/",
     "git push * --delete * tag",
-    "rm -rf",
-    "rm -r ",
+    "rm ",
     "cd &&",
 ];
 
@@ -258,7 +257,6 @@ const MODERATE_BASH_COMMANDS: &[&str] = &[
     "pipx",
     "npm",
     "pnpm",
-    "rkvr rmrf",
     "gh pr create",
     "curl",
 ];
@@ -452,14 +450,11 @@ mod tests {
     // --- Deny list tests ---
 
     #[test]
-    fn deny_rm_rf() {
+    fn deny_rm() {
         assert!(matches_deny_list("rm -rf /tmp"));
-        assert!(matches_deny_list("rm -rf"));
-    }
-
-    #[test]
-    fn deny_rm_r() {
         assert!(matches_deny_list("rm -r /tmp"));
+        assert!(matches_deny_list("rm /tmp/file"));
+        assert!(matches_deny_list("rm -f /tmp/file"));
     }
 
     #[test]
