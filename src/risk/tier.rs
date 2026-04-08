@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::fmt;
 
+use crate::config::{Config, ListConfig, ListMode};
+
 /// Risk classification for a permission rule or tool invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -88,8 +90,10 @@ fn split_paren(rule: &str) -> Option<(&str, &str)> {
     Some((&rule[..i], &rule[i + 1..rule.len() - 1]))
 }
 
-/// Patterns that should always be denied.
-const PERMANENT_DENY: &[&str] = &[
+// --- Built-in defaults ---
+
+/// Default bash patterns that are permanently denied (blocks execution when enforce-deny is on).
+const DEFAULT_DENY: &[&str] = &[
     "git tag -d",
     "git push * :refs/tags/",
     "git push * --delete * tag",
@@ -97,58 +101,8 @@ const PERMANENT_DENY: &[&str] = &[
     "cd &&",
 ];
 
-/// Check if a command matches any permanent deny pattern.
-pub fn matches_deny_list(command: &str) -> bool {
-    let cmd = command.trim();
-    PERMANENT_DENY.iter().any(|pattern| {
-        if pattern.contains('*') {
-            glob_match(pattern, cmd)
-        } else if *pattern == "cd &&" {
-            // Special case: "cd && ..." or "cd <path> && ..."
-            cmd.starts_with("cd ") && cmd.contains("&&")
-        } else {
-            cmd.starts_with(pattern)
-        }
-    })
-}
-
-/// Simple glob matching: `*` matches any sequence of non-empty chars.
-fn glob_match(pattern: &str, text: &str) -> bool {
-    let parts: Vec<&str> = pattern.split('*').collect();
-    if parts.is_empty() {
-        return true;
-    }
-
-    let mut pos = 0;
-    for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() {
-            continue;
-        }
-        if i == 0 {
-            // First part must match at start
-            if !text[pos..].starts_with(part) {
-                return false;
-            }
-            pos += part.len();
-        } else {
-            // Subsequent parts must appear after previous match
-            match text[pos..].find(part) {
-                Some(found) => {
-                    // Ensure at least one char was consumed by the wildcard
-                    if found == 0 {
-                        return false;
-                    }
-                    pos += found + part.len();
-                }
-                None => return false,
-            }
-        }
-    }
-    true
-}
-
-/// MCP tools that perform write/mutation operations.
-const MCP_WRITE_PREFIXES: &[&str] = &[
+/// Default MCP tools classified as dangerous (write/mutation operations).
+const DEFAULT_MCP_WRITE_PREFIXES: &[&str] = &[
     "mcp__slack__conversations_add_message",
     "mcp__atlassian__createJiraIssue",
     "mcp__atlassian__editJiraIssue",
@@ -166,8 +120,8 @@ const MCP_WRITE_PREFIXES: &[&str] = &[
     "mcp__multi-account-github__create_release",
 ];
 
-/// Read-only Bash commands (first word or "first second" prefix).
-const SAFE_BASH_COMMANDS: &[&str] = &[
+/// Default read-only Bash commands (first word or "first second" prefix).
+const DEFAULT_SAFE_BASH_COMMANDS: &[&str] = &[
     "ls",
     "tree",
     "stat",
@@ -229,8 +183,8 @@ const SAFE_BASH_COMMANDS: &[&str] = &[
     "gh run list",
 ];
 
-/// Moderate Bash commands (local writes, reversible).
-const MODERATE_BASH_COMMANDS: &[&str] = &[
+/// Default moderate Bash commands (local writes, reversible).
+const DEFAULT_MODERATE_BASH_COMMANDS: &[&str] = &[
     "git commit",
     "git push",
     "git add",
@@ -261,59 +215,219 @@ const MODERATE_BASH_COMMANDS: &[&str] = &[
     "curl",
 ];
 
-/// Classify a permission rule string like "Bash(git status:*)" or "Edit(src/**/*.rs)".
-pub fn classify_rule(rule: &str) -> RiskTier {
-    // Parse the rule format: Tool(pattern) or bare tool name
-    if let Some(inner) = extract_bash_pattern(rule) {
-        return classify_bash_command(inner);
-    }
+/// Default overly broad patterns (triggers Narrow recommendation).
+const DEFAULT_BROAD_PATTERNS: &[&str] = &[
+    "Bash(git:*)",
+    "Bash(docker:*)",
+    "Bash(sudo:*)",
+    "Bash(yes:*)",
+];
 
-    if rule == "Edit" || rule == "Write" || rule == "Edit(**)" || rule == "Write(**)" {
-        return RiskTier::Dangerous;
-    }
+// --- Rules ---
 
-    if rule.starts_with("Edit(") || rule.starts_with("Write(") {
-        return RiskTier::Moderate;
-    }
-
-    // Bare Read or Read(**) is carte blanche filesystem access - moderate risk
-    if rule == "Read" || rule == "Read(**)" {
-        return RiskTier::Moderate;
-    }
-
-    if rule == "Glob" || rule == "Grep" || rule == "Glob(**)" || rule == "Grep(**)" {
-        return RiskTier::Safe;
-    }
-
-    if rule.starts_with("Read(") || rule.starts_with("Glob(") || rule.starts_with("Grep(") {
-        return RiskTier::Safe;
-    }
-
-    if rule.starts_with("WebFetch(") || rule == "WebSearch" {
-        return RiskTier::Safe;
-    }
-
-    if rule.starts_with("Skill(") {
-        return RiskTier::Safe;
-    }
-
-    if rule.starts_with("mcp__") {
-        return classify_mcp_tool(rule);
-    }
-
-    // Unknown tool type - default to moderate
-    RiskTier::Moderate
+/// Resolved runtime rules, built from built-in defaults merged with user config.
+pub struct Rules {
+    pub enforce_deny: bool,
+    pub deny_patterns: Vec<String>,
+    pub safe_commands: Vec<String>,
+    pub moderate_commands: Vec<String>,
+    pub mcp_write_tools: Vec<String>,
+    pub broad_patterns: Vec<String>,
 }
 
-/// Classify a raw tool invocation (tool_name + tool_input).
-pub fn classify_tool_input(tool_name: &str, normalized_input: &str) -> RiskTier {
-    match tool_name {
-        "Bash" => classify_bash_command(normalized_input),
-        "Edit" | "Write" => RiskTier::Moderate,
-        "Read" | "Glob" | "Grep" => RiskTier::Safe,
-        "WebFetch" | "WebSearch" => RiskTier::Safe,
-        name if name.starts_with("mcp__") => classify_mcp_tool(name),
-        _ => RiskTier::Moderate,
+impl Default for Rules {
+    fn default() -> Self {
+        Self {
+            enforce_deny: false,
+            deny_patterns: DEFAULT_DENY.iter().map(|s| s.to_string()).collect(),
+            safe_commands: DEFAULT_SAFE_BASH_COMMANDS.iter().map(|s| s.to_string()).collect(),
+            moderate_commands: DEFAULT_MODERATE_BASH_COMMANDS.iter().map(|s| s.to_string()).collect(),
+            mcp_write_tools: DEFAULT_MCP_WRITE_PREFIXES.iter().map(|s| s.to_string()).collect(),
+            broad_patterns: DEFAULT_BROAD_PATTERNS.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+}
+
+impl Rules {
+    pub fn from_config(config: &Config) -> Self {
+        Self {
+            enforce_deny: config.enforce_deny,
+            deny_patterns: resolve_list(DEFAULT_DENY, &config.deny_patterns),
+            safe_commands: resolve_list(DEFAULT_SAFE_BASH_COMMANDS, &config.safe_commands),
+            moderate_commands: resolve_list(DEFAULT_MODERATE_BASH_COMMANDS, &config.moderate_commands),
+            mcp_write_tools: resolve_list(DEFAULT_MCP_WRITE_PREFIXES, &config.mcp_write_tools),
+            broad_patterns: resolve_list(DEFAULT_BROAD_PATTERNS, &config.broad_patterns),
+        }
+    }
+
+    /// Check if a command matches any deny pattern.
+    pub fn matches_deny_list(&self, command: &str) -> bool {
+        let cmd = command.trim();
+        self.deny_patterns.iter().any(|pattern| {
+            if pattern.contains('*') {
+                glob_match(pattern, cmd)
+            } else if pattern == "cd &&" {
+                // Special case: "cd <path> && ..." pattern
+                cmd.starts_with("cd ") && cmd.contains("&&")
+            } else {
+                cmd.starts_with(pattern.as_str())
+            }
+        })
+    }
+
+    /// Classify a permission rule string like "Bash(git status:*)" or "Edit(src/**/*.rs)".
+    pub fn classify_rule(&self, rule: &str) -> RiskTier {
+        if let Some(inner) = extract_bash_pattern(rule) {
+            return self.classify_bash_command(inner);
+        }
+
+        if rule == "Edit" || rule == "Write" || rule == "Edit(**)" || rule == "Write(**)" {
+            return RiskTier::Dangerous;
+        }
+
+        if rule.starts_with("Edit(") || rule.starts_with("Write(") {
+            return RiskTier::Moderate;
+        }
+
+        // Bare Read or Read(**) is carte blanche filesystem access - moderate risk
+        if rule == "Read" || rule == "Read(**)" {
+            return RiskTier::Moderate;
+        }
+
+        if rule == "Glob" || rule == "Grep" || rule == "Glob(**)" || rule == "Grep(**)" {
+            return RiskTier::Safe;
+        }
+
+        if rule.starts_with("Read(") || rule.starts_with("Glob(") || rule.starts_with("Grep(") {
+            return RiskTier::Safe;
+        }
+
+        if rule.starts_with("WebFetch(") || rule == "WebSearch" {
+            return RiskTier::Safe;
+        }
+
+        if rule.starts_with("Skill(") {
+            return RiskTier::Safe;
+        }
+
+        if rule.starts_with("mcp__") {
+            return self.classify_mcp_tool(rule);
+        }
+
+        // Unknown tool type - default to moderate
+        RiskTier::Moderate
+    }
+
+    /// Classify a raw tool invocation (tool_name + tool_input).
+    pub fn classify_tool_input(&self, tool_name: &str, normalized_input: &str) -> RiskTier {
+        match tool_name {
+            "Bash" => self.classify_bash_command(normalized_input),
+            "Edit" | "Write" => RiskTier::Moderate,
+            "Read" | "Glob" | "Grep" => RiskTier::Safe,
+            "WebFetch" | "WebSearch" => RiskTier::Safe,
+            name if name.starts_with("mcp__") => self.classify_mcp_tool(name),
+            _ => RiskTier::Moderate,
+        }
+    }
+
+    /// Determine recommendation for a rule given its risk tier and source.
+    pub fn recommend(&self, tier: RiskTier, source: &str, rule: &str) -> Recommendation {
+        // Permanently denied patterns
+        if let Some(cmd) = extract_bash_pattern(rule)
+            && self.matches_deny_list(cmd)
+        {
+            return Recommendation::Deny;
+        }
+
+        // Overly broad patterns
+        if self.is_overly_broad(rule) {
+            return Recommendation::Narrow;
+        }
+
+        match (tier, source) {
+            // Safe rules in local should be promoted to global
+            (RiskTier::Safe, "local") => Recommendation::Promote,
+            // Moderate rules in local - keep where they are
+            (RiskTier::Moderate, "local") => Recommendation::Keep,
+            // Dangerous rules in local - recommend removal
+            (RiskTier::Dangerous, "local") => Recommendation::Remove,
+            // Everything in global is already where it should be
+            (_, "global") => Recommendation::Keep,
+            _ => Recommendation::Keep,
+        }
+    }
+
+    fn classify_bash_command(&self, cmd: &str) -> RiskTier {
+        let cmd = cmd.trim();
+
+        // Check deny list first
+        if self.matches_deny_list(cmd) {
+            return RiskTier::Dangerous;
+        }
+
+        // sudo prefix is always dangerous
+        if cmd.starts_with("sudo ") {
+            return RiskTier::Dangerous;
+        }
+
+        // git push --force is dangerous
+        if cmd.starts_with("git push") && (cmd.contains("--force") || cmd.contains("-f")) {
+            return RiskTier::Dangerous;
+        }
+
+        // Env var assignments (e.g. GH_TOKEN="..." cmd) are one-time specific invocations
+        if starts_with_env_var(cmd) {
+            return RiskTier::Dangerous;
+        }
+
+        // git -C <path> is a path-locked invocation that shouldn't be permanently allowed
+        if cmd.starts_with("git -C ") {
+            return RiskTier::Dangerous;
+        }
+
+        // bash -c is an arbitrary shell escape and should not be permanently allowed
+        if cmd.starts_with("bash -c") {
+            return RiskTier::Dangerous;
+        }
+
+        // Check safe commands (longest prefix match)
+        if matches_command_list(cmd, &self.safe_commands) {
+            return RiskTier::Safe;
+        }
+
+        // Check moderate commands
+        if matches_command_list(cmd, &self.moderate_commands) {
+            return RiskTier::Moderate;
+        }
+
+        // Unknown command - default to moderate
+        RiskTier::Moderate
+    }
+
+    fn classify_mcp_tool(&self, tool: &str) -> RiskTier {
+        let base = tool.split('(').next().unwrap_or(tool);
+        if self.mcp_write_tools.iter().any(|prefix| base.starts_with(prefix.as_str())) {
+            RiskTier::Dangerous
+        } else {
+            RiskTier::Moderate
+        }
+    }
+
+    fn is_overly_broad(&self, rule: &str) -> bool {
+        self.broad_patterns.iter().any(|p| p == rule)
+    }
+}
+
+// --- Helpers ---
+
+fn resolve_list(defaults: &[&str], list_config: &ListConfig) -> Vec<String> {
+    match list_config.mode {
+        ListMode::Replace => list_config.items.clone(),
+        ListMode::Extend => {
+            let mut v: Vec<String> = defaults.iter().map(|s| s.to_string()).collect();
+            v.extend(list_config.items.iter().cloned());
+            v
+        }
     }
 }
 
@@ -327,206 +441,191 @@ fn extract_bash_pattern(rule: &str) -> Option<&str> {
     Some(inner.strip_suffix(":*").unwrap_or(inner))
 }
 
-fn classify_bash_command(cmd: &str) -> RiskTier {
-    let cmd = cmd.trim();
-
-    // Check permanent deny list first
-    if matches_deny_list(cmd) {
-        return RiskTier::Dangerous;
-    }
-
-    // sudo prefix is always dangerous
-    if cmd.starts_with("sudo ") {
-        return RiskTier::Dangerous;
-    }
-
-    // git push --force is dangerous
-    if cmd.starts_with("git push") && (cmd.contains("--force") || cmd.contains("-f")) {
-        return RiskTier::Dangerous;
-    }
-
-    // Env var assignments (e.g. GH_TOKEN="..." cmd) are one-time specific invocations
-    if starts_with_env_var(cmd) {
-        return RiskTier::Dangerous;
-    }
-
-    // git -C <path> is a path-locked invocation that shouldn't be permanently allowed
-    if cmd.starts_with("git -C ") {
-        return RiskTier::Dangerous;
-    }
-
-    // bash -c is an arbitrary shell escape and should not be permanently allowed
-    if cmd.starts_with("bash -c") {
-        return RiskTier::Dangerous;
-    }
-
-    // Check safe commands (longest prefix match)
-    if matches_command_list(cmd, SAFE_BASH_COMMANDS) {
-        return RiskTier::Safe;
-    }
-
-    // Check moderate commands
-    if matches_command_list(cmd, MODERATE_BASH_COMMANDS) {
-        return RiskTier::Moderate;
-    }
-
-    // Unknown command - default to moderate
-    RiskTier::Moderate
-}
-
 /// Returns true if the command starts with a shell env var assignment (e.g. `FOO=bar cmd`).
 fn starts_with_env_var(cmd: &str) -> bool {
-    // Match VAR= or VAR="..." at the start, where VAR is [A-Z_][A-Z0-9_]*
     let bytes = cmd.as_bytes();
     let mut i = 0;
-    // Must start with an uppercase letter or underscore
     if i >= bytes.len() || !(bytes[i].is_ascii_uppercase() || bytes[i] == b'_') {
         return false;
     }
     i += 1;
-    // Consume rest of VAR name
     while i < bytes.len() && (bytes[i].is_ascii_uppercase() || bytes[i].is_ascii_digit() || bytes[i] == b'_') {
         i += 1;
     }
-    // Must be followed by '='
     i < bytes.len() && bytes[i] == b'='
 }
 
-fn classify_mcp_tool(tool: &str) -> RiskTier {
-    // Strip any pattern suffix for matching
-    let base = tool.split('(').next().unwrap_or(tool);
-    if MCP_WRITE_PREFIXES.iter().any(|prefix| base.starts_with(prefix)) {
-        RiskTier::Dangerous
-    } else {
-        RiskTier::Moderate
-    }
-}
-
 /// Check if a command matches any prefix in the given list.
-fn matches_command_list(cmd: &str, list: &[&str]) -> bool {
+fn matches_command_list(cmd: &str, list: &[String]) -> bool {
     list.iter().any(|prefix| {
-        cmd == *prefix || cmd.starts_with(&format!("{prefix} ")) || cmd.starts_with(&format!("{prefix}:"))
+        cmd == prefix.as_str()
+            || cmd.starts_with(&format!("{prefix} "))
+            || cmd.starts_with(&format!("{prefix}:"))
     })
 }
 
-/// Determine recommendation for a rule given its risk tier and source.
-pub fn recommend(tier: RiskTier, source: &str, rule: &str) -> Recommendation {
-    // Permanently denied patterns
-    if let Some(cmd) = extract_bash_pattern(rule)
-        && matches_deny_list(cmd)
-    {
-        return Recommendation::Deny;
+/// Simple glob matching: `*` matches any sequence of non-empty chars.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.is_empty() {
+        return true;
     }
 
-    // Overly broad patterns
-    if is_overly_broad(rule) {
-        return Recommendation::Narrow;
+    let mut pos = 0;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            if !text[pos..].starts_with(part) {
+                return false;
+            }
+            pos += part.len();
+        } else {
+            match text[pos..].find(part) {
+                Some(found) => {
+                    if found == 0 {
+                        return false;
+                    }
+                    pos += found + part.len();
+                }
+                None => return false,
+            }
+        }
     }
-
-    match (tier, source) {
-        // Safe rules in local should be promoted to global
-        (RiskTier::Safe, "local") => Recommendation::Promote,
-        // Moderate rules in local - keep where they are
-        (RiskTier::Moderate, "local") => Recommendation::Keep,
-        // Dangerous rules in local - recommend removal
-        (RiskTier::Dangerous, "local") => Recommendation::Remove,
-        // Everything in global is already where it should be
-        (_, "global") => Recommendation::Keep,
-        _ => Recommendation::Keep,
-    }
-}
-
-/// Check if a rule pattern is overly broad (covers both safe and dangerous commands).
-fn is_overly_broad(rule: &str) -> bool {
-    // Bash(git:*) would match git status (safe) AND git push --force (dangerous)
-    let broad_patterns = ["Bash(git:*)", "Bash(docker:*)", "Bash(sudo:*)", "Bash(yes:*)"];
-    broad_patterns.contains(&rule)
+    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn rules() -> Rules {
+        Rules::default()
+    }
+
     // --- Deny list tests ---
 
     #[test]
     fn deny_rm() {
-        assert!(matches_deny_list("rm -rf /tmp"));
-        assert!(matches_deny_list("rm -r /tmp"));
-        assert!(matches_deny_list("rm /tmp/file"));
-        assert!(matches_deny_list("rm -f /tmp/file"));
+        let r = rules();
+        assert!(r.matches_deny_list("rm -rf /tmp"));
+        assert!(r.matches_deny_list("rm -r /tmp"));
+        assert!(r.matches_deny_list("rm /tmp/file"));
+        assert!(r.matches_deny_list("rm -f /tmp/file"));
     }
 
     #[test]
     fn deny_cd_and() {
-        assert!(matches_deny_list("cd && git status"));
-        assert!(matches_deny_list("cd /tmp && rm -rf ."));
+        let r = rules();
+        assert!(r.matches_deny_list("cd && git status"));
+        assert!(r.matches_deny_list("cd /tmp && rm -rf ."));
     }
 
     #[test]
     fn deny_git_tag_delete() {
-        assert!(matches_deny_list("git tag -d v1.0"));
+        let r = rules();
+        assert!(r.matches_deny_list("git tag -d v1.0"));
     }
 
     #[test]
     fn allow_safe_commands() {
-        assert!(!matches_deny_list("ls -la"));
-        assert!(!matches_deny_list("git status"));
-        assert!(!matches_deny_list("cargo build"));
+        let r = rules();
+        assert!(!r.matches_deny_list("ls -la"));
+        assert!(!r.matches_deny_list("git status"));
+        assert!(!r.matches_deny_list("cargo build"));
+    }
+
+    #[test]
+    fn replace_deny_list_removes_defaults() {
+        use crate::config::{Config, ListConfig, ListMode};
+        let mut config = Config::default();
+        config.deny_patterns = ListConfig {
+            mode: ListMode::Replace,
+            items: vec!["shutdown".to_string()],
+        };
+        let r = Rules::from_config(&config);
+        // rm should no longer be denied
+        assert!(!r.matches_deny_list("rm /tmp/file"));
+        // custom pattern should be denied
+        assert!(r.matches_deny_list("shutdown now"));
+    }
+
+    #[test]
+    fn extend_deny_list_adds_to_defaults() {
+        use crate::config::{Config, ListConfig, ListMode};
+        let mut config = Config::default();
+        config.deny_patterns = ListConfig {
+            mode: ListMode::Extend,
+            items: vec!["shutdown".to_string()],
+        };
+        let r = Rules::from_config(&config);
+        // Original patterns still apply
+        assert!(r.matches_deny_list("rm /tmp/file"));
+        // Custom pattern also applies
+        assert!(r.matches_deny_list("shutdown now"));
     }
 
     // --- Rule classification tests ---
 
     #[test]
     fn classify_safe_bash() {
-        assert_eq!(classify_rule("Bash(ls:*)"), RiskTier::Safe);
-        assert_eq!(classify_rule("Bash(git status:*)"), RiskTier::Safe);
-        assert_eq!(classify_rule("Bash(git diff:*)"), RiskTier::Safe);
-        assert_eq!(classify_rule("Bash(tree:*)"), RiskTier::Safe);
-        assert_eq!(classify_rule("Bash(cat:*)"), RiskTier::Safe);
+        let r = rules();
+        assert_eq!(r.classify_rule("Bash(ls:*)"), RiskTier::Safe);
+        assert_eq!(r.classify_rule("Bash(git status:*)"), RiskTier::Safe);
+        assert_eq!(r.classify_rule("Bash(git diff:*)"), RiskTier::Safe);
+        assert_eq!(r.classify_rule("Bash(tree:*)"), RiskTier::Safe);
+        assert_eq!(r.classify_rule("Bash(cat:*)"), RiskTier::Safe);
     }
 
     #[test]
     fn classify_moderate_bash() {
-        assert_eq!(classify_rule("Bash(git commit:*)"), RiskTier::Moderate);
-        assert_eq!(classify_rule("Bash(git push:*)"), RiskTier::Moderate);
-        assert_eq!(classify_rule("Bash(cargo:*)"), RiskTier::Moderate);
-        assert_eq!(classify_rule("Bash(mkdir:*)"), RiskTier::Moderate);
+        let r = rules();
+        assert_eq!(r.classify_rule("Bash(git commit:*)"), RiskTier::Moderate);
+        assert_eq!(r.classify_rule("Bash(git push:*)"), RiskTier::Moderate);
+        assert_eq!(r.classify_rule("Bash(cargo:*)"), RiskTier::Moderate);
+        assert_eq!(r.classify_rule("Bash(mkdir:*)"), RiskTier::Moderate);
     }
 
     #[test]
     fn classify_dangerous_bash() {
-        assert_eq!(classify_rule("Bash(sudo rm:*)"), RiskTier::Dangerous);
-        assert_eq!(classify_rule("Bash(sudo apt install:*)"), RiskTier::Dangerous);
+        let r = rules();
+        assert_eq!(r.classify_rule("Bash(sudo rm:*)"), RiskTier::Dangerous);
+        assert_eq!(r.classify_rule("Bash(sudo apt install:*)"), RiskTier::Dangerous);
     }
 
     #[test]
     fn classify_file_tools() {
-        assert_eq!(classify_rule("Edit(src/**/*.rs)"), RiskTier::Moderate);
-        assert_eq!(classify_rule("Write(docs/**/*.md)"), RiskTier::Moderate);
-        assert_eq!(classify_rule("Read(**/*.yml)"), RiskTier::Safe);
+        let r = rules();
+        assert_eq!(r.classify_rule("Edit(src/**/*.rs)"), RiskTier::Moderate);
+        assert_eq!(r.classify_rule("Write(docs/**/*.md)"), RiskTier::Moderate);
+        assert_eq!(r.classify_rule("Read(**/*.yml)"), RiskTier::Safe);
     }
 
     #[test]
     fn classify_web_tools() {
-        assert_eq!(classify_rule("WebFetch(domain:docs.rs)"), RiskTier::Safe);
-        assert_eq!(classify_rule("WebSearch"), RiskTier::Safe);
+        let r = rules();
+        assert_eq!(r.classify_rule("WebFetch(domain:docs.rs)"), RiskTier::Safe);
+        assert_eq!(r.classify_rule("WebSearch"), RiskTier::Safe);
     }
 
     #[test]
     fn classify_skill() {
-        assert_eq!(classify_rule("Skill(rust-cli-coder)"), RiskTier::Safe);
+        let r = rules();
+        assert_eq!(r.classify_rule("Skill(rust-cli-coder)"), RiskTier::Safe);
     }
 
     #[test]
     fn classify_mcp_read() {
-        assert_eq!(classify_rule("mcp__atlassian__getJiraIssue"), RiskTier::Moderate);
+        let r = rules();
+        assert_eq!(r.classify_rule("mcp__atlassian__getJiraIssue"), RiskTier::Moderate);
     }
 
     #[test]
     fn classify_mcp_write() {
+        let r = rules();
         assert_eq!(
-            classify_rule("mcp__slack__conversations_add_message"),
+            r.classify_rule("mcp__slack__conversations_add_message"),
             RiskTier::Dangerous
         );
     }
@@ -535,20 +634,23 @@ mod tests {
 
     #[test]
     fn classify_input_bash_safe() {
-        assert_eq!(classify_tool_input("Bash", "ls -la"), RiskTier::Safe);
-        assert_eq!(classify_tool_input("Bash", "git log --oneline"), RiskTier::Safe);
+        let r = rules();
+        assert_eq!(r.classify_tool_input("Bash", "ls -la"), RiskTier::Safe);
+        assert_eq!(r.classify_tool_input("Bash", "git log --oneline"), RiskTier::Safe);
     }
 
     #[test]
     fn classify_input_bash_dangerous() {
-        assert_eq!(classify_tool_input("Bash", "sudo rm -rf /"), RiskTier::Dangerous);
-        assert_eq!(classify_tool_input("Bash", "rm -rf /tmp"), RiskTier::Dangerous);
+        let r = rules();
+        assert_eq!(r.classify_tool_input("Bash", "sudo rm -rf /"), RiskTier::Dangerous);
+        assert_eq!(r.classify_tool_input("Bash", "rm -rf /tmp"), RiskTier::Dangerous);
     }
 
     #[test]
     fn classify_input_force_push() {
+        let r = rules();
         assert_eq!(
-            classify_tool_input("Bash", "git push --force origin main"),
+            r.classify_tool_input("Bash", "git push --force origin main"),
             RiskTier::Dangerous
         );
     }
@@ -557,40 +659,39 @@ mod tests {
 
     #[test]
     fn recommend_promote_safe_local() {
-        assert_eq!(
-            recommend(RiskTier::Safe, "local", "Bash(ls:*)"),
-            Recommendation::Promote
-        );
+        let r = rules();
+        assert_eq!(r.recommend(RiskTier::Safe, "local", "Bash(ls:*)"), Recommendation::Promote);
     }
 
     #[test]
     fn recommend_keep_moderate_local() {
-        assert_eq!(
-            recommend(RiskTier::Moderate, "local", "Bash(cargo:*)"),
-            Recommendation::Keep
-        );
+        let r = rules();
+        assert_eq!(r.recommend(RiskTier::Moderate, "local", "Bash(cargo:*)"), Recommendation::Keep);
     }
 
     #[test]
     fn recommend_remove_dangerous_local() {
+        let r = rules();
         assert_eq!(
-            recommend(RiskTier::Dangerous, "local", "Bash(sudo rm:*)"),
+            r.recommend(RiskTier::Dangerous, "local", "Bash(sudo rm:*)"),
             Recommendation::Remove
         );
     }
 
     #[test]
     fn recommend_deny_pattern() {
+        let r = rules();
         assert_eq!(
-            recommend(RiskTier::Dangerous, "local", "Bash(rm -rf:*)"),
+            r.recommend(RiskTier::Dangerous, "local", "Bash(rm -rf:*)"),
             Recommendation::Deny
         );
     }
 
     #[test]
     fn recommend_narrow_broad() {
+        let r = rules();
         assert_eq!(
-            recommend(RiskTier::Moderate, "global", "Bash(git:*)"),
+            r.recommend(RiskTier::Moderate, "global", "Bash(git:*)"),
             Recommendation::Narrow
         );
     }
@@ -599,33 +700,36 @@ mod tests {
 
     #[test]
     fn broad_git_pattern() {
-        assert!(is_overly_broad("Bash(git:*)"));
+        let r = rules();
+        assert!(r.is_overly_broad("Bash(git:*)"));
     }
 
     #[test]
     fn not_broad_specific_git() {
-        assert!(!is_overly_broad("Bash(git status:*)"));
+        let r = rules();
+        assert!(!r.is_overly_broad("Bash(git status:*)"));
     }
 
     // --- Env var prefix tests ---
 
     #[test]
     fn env_var_prefix_is_dangerous() {
+        let r = rules();
         assert_eq!(
-            classify_rule("Bash(GH_TOKEN=\"$TOKEN\" gh pr view:*)"),
+            r.classify_rule("Bash(GH_TOKEN=\"$TOKEN\" gh pr view:*)"),
             RiskTier::Dangerous
         );
         assert_eq!(
-            classify_rule("Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id\" git push:*)"),
+            r.classify_rule("Bash(GIT_SSH_COMMAND=\"ssh -i ~/.ssh/id\" git push:*)"),
             RiskTier::Dangerous
         );
-        assert_eq!(classify_rule("Bash(API_KEY=\"abc\" curl:*)"), RiskTier::Dangerous);
+        assert_eq!(r.classify_rule("Bash(API_KEY=\"abc\" curl:*)"), RiskTier::Dangerous);
     }
 
     #[test]
     fn lowercase_var_is_not_env_var() {
-        // lowercase assignments are not detected (conservative)
-        assert_ne!(classify_rule("Bash(foo=bar cmd:*)"), RiskTier::Dangerous);
+        let r = rules();
+        assert_ne!(r.classify_rule("Bash(foo=bar cmd:*)"), RiskTier::Dangerous);
     }
 
     #[test]
@@ -641,21 +745,43 @@ mod tests {
 
     #[test]
     fn git_dash_c_is_dangerous() {
-        assert_eq!(classify_rule("Bash(git -C /some/path push:*)"), RiskTier::Dangerous);
-        assert_eq!(classify_rule("Bash(git -C ~/repos/foo status:*)"), RiskTier::Dangerous);
+        let r = rules();
+        assert_eq!(r.classify_rule("Bash(git -C /some/path push:*)"), RiskTier::Dangerous);
+        assert_eq!(r.classify_rule("Bash(git -C ~/repos/foo status:*)"), RiskTier::Dangerous);
     }
 
     #[test]
     fn git_without_dash_c_not_affected() {
-        assert_eq!(classify_rule("Bash(git status:*)"), RiskTier::Safe);
-        assert_eq!(classify_rule("Bash(git push:*)"), RiskTier::Moderate);
+        let r = rules();
+        assert_eq!(r.classify_rule("Bash(git status:*)"), RiskTier::Safe);
+        assert_eq!(r.classify_rule("Bash(git push:*)"), RiskTier::Moderate);
     }
 
     // --- bash -c tests ---
 
     #[test]
     fn bash_dash_c_is_dangerous() {
-        assert_eq!(classify_rule("Bash(bash -c 'echo hi':*)"), RiskTier::Dangerous);
-        assert_eq!(classify_rule("Bash(bash -c:*)"), RiskTier::Dangerous);
+        let r = rules();
+        assert_eq!(r.classify_rule("Bash(bash -c 'echo hi':*)"), RiskTier::Dangerous);
+        assert_eq!(r.classify_rule("Bash(bash -c:*)"), RiskTier::Dangerous);
+    }
+
+    // --- subsumes tests ---
+
+    #[test]
+    fn subsumes_bash_prefix() {
+        assert!(subsumes("Bash(git:*)", "Bash(git status:*)"));
+        assert!(!subsumes("Bash(git status:*)", "Bash(git:*)"));
+    }
+
+    #[test]
+    fn subsumes_file_tool() {
+        assert!(subsumes("Edit(**)", "Edit(**/*.rs)"));
+        assert!(!subsumes("Edit(**/*.rs)", "Edit(**)"));
+    }
+
+    #[test]
+    fn subsumes_same_rule() {
+        assert!(!subsumes("Bash(git:*)", "Bash(git:*)"));
     }
 }

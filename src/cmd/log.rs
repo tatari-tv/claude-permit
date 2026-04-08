@@ -4,7 +4,7 @@ use std::io::Read;
 
 use crate::db::EventStore;
 use crate::hook::{HookPayload, normalize_tool_input};
-use crate::risk::{classify_tool_input, matches_deny_list};
+use crate::risk::Rules;
 
 /// The result of running the log command - either passthrough or deny.
 pub enum LogResult {
@@ -35,9 +35,9 @@ impl LogResult {
 
 /// Run the `log` subcommand: read hook JSON from stdin, write event to DB.
 ///
-/// If `enforce_deny` is true and the command matches a permanent deny pattern,
+/// If `rules.enforce_deny` is true and the command matches a deny pattern,
 /// returns a Deny result instead of Passthrough.
-pub fn run_log(store: &EventStore, enforce_deny: bool, extra_deny_patterns: &[String]) -> Result<LogResult> {
+pub fn run_log(store: &EventStore, rules: &Rules) -> Result<LogResult> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
 
@@ -47,7 +47,7 @@ pub fn run_log(store: &EventStore, enforce_deny: bool, extra_deny_patterns: &[St
     let raw_input = serde_json::to_string(&payload.tool_input)?;
     let session_id = payload.session_id.as_deref().unwrap_or("unknown");
     let timestamp = chrono::Utc::now().to_rfc3339();
-    let tier = classify_tool_input(&payload.tool_name, &normalized);
+    let tier = rules.classify_tool_input(&payload.tool_name, &normalized);
 
     store.insert_event(
         &timestamp,
@@ -60,17 +60,9 @@ pub fn run_log(store: &EventStore, enforce_deny: bool, extra_deny_patterns: &[St
     )?;
 
     // Check deny enforcement
-    if enforce_deny && payload.tool_name == "Bash" {
-        if matches_deny_list(&normalized) {
+    if rules.enforce_deny && payload.tool_name == "Bash" {
+        if rules.matches_deny_list(&normalized) {
             return Ok(LogResult::Deny(deny_reason(&normalized)));
-        }
-        // Check extra patterns from config
-        for pattern in extra_deny_patterns {
-            if normalized.starts_with(pattern.as_str()) {
-                return Ok(LogResult::Deny(format!(
-                    "'{normalized}' matches configured deny pattern '{pattern}'"
-                )));
-            }
         }
     }
 
@@ -130,8 +122,12 @@ mod tests {
 
     #[test]
     fn log_inserts_event_with_tier() {
+        use crate::hook::normalize_tool_input;
+        use crate::hook::HookPayload;
+
         let dir = tempfile::TempDir::new().expect("temp dir");
         let store = EventStore::open(&dir.path().join("test.db")).expect("open");
+        let rules = Rules::default();
 
         let json = r#"{"tool_name":"Bash","tool_input":{"command":"git status"},"session_id":"s1"}"#;
 
@@ -140,7 +136,7 @@ mod tests {
         let raw_input = serde_json::to_string(&payload.tool_input).expect("serialize");
         let session_id = payload.session_id.as_deref().unwrap_or("unknown");
         let timestamp = chrono::Utc::now().to_rfc3339();
-        let tier = classify_tool_input(&payload.tool_name, &normalized);
+        let tier = rules.classify_tool_input(&payload.tool_name, &normalized);
 
         store
             .insert_event(

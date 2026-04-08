@@ -10,14 +10,66 @@ suggest-sessions: 2
 # Days after which events are eligible for cleanup
 clean-older-than: 90
 
-# Whether the log command should actively deny permanently-blocked patterns
-enforce-deny: true
+# Whether the log command should actively deny matched patterns.
+# Default: false (observe only). Set to true to enforce blocking.
+enforce-deny: false
 
-# Additional deny patterns beyond the built-in list
-# extra-deny-patterns:
-#   - "shutdown"
-#   - "reboot"
+# Bash patterns that are permanently denied when enforce-deny is true.
+# mode: extend (default) - add items to the built-in defaults
+# mode: replace - ignore defaults entirely and use only the items listed
+#
+# Built-in defaults:
+#   "git tag -d"                       - local tag deletion
+#   "git push * :refs/tags/"           - remote tag deletion
+#   "git push * --delete * tag"        - remote tag deletion (alt form)
+#   "rm "                              - any rm invocation
+#   "cd &&"                            - compound cd commands
+#
+# Example: add a pattern
+# deny-patterns:
+#   items:
+#     - "shutdown"
+#     - "reboot"
+#
+# Example: replace defaults entirely (only block what you specify)
+# deny-patterns:
+#   mode: replace
+#   items:
+#     - "rm "
 
-# Risk tier overrides (pattern -> tier)
-# risk-overrides:
-#   "cargo build": "safe"
+# Bash commands classified as safe risk.
+# Overriding these affects audit recommendations only, not enforcement.
+#
+# Example: add a custom tool to the safe list
+# safe-commands:
+#   items:
+#     - "mytool"
+
+# Bash commands classified as moderate risk.
+#
+# Example: replace the moderate list entirely
+# moderate-commands:
+#   mode: replace
+#   items:
+#     - "cargo"
+#     - "git commit"
+
+# MCP tools classified as dangerous (write/mutation operations).
+#
+# Example: add a service's write operations
+# mcp-write-tools:
+#   items:
+#     - "mcp__myservice__create_thing"
+#     - "mcp__myservice__delete_thing"
+
+# Rule patterns considered overly broad (triggers Narrow recommendation in audit).
+#
+# Built-in defaults: Bash(git:*), Bash(docker:*), Bash(sudo:*), Bash(yes:*)
+#
+# Example: add a broad pattern to flag
+# broad-patterns:
+#   items:
+#     - "Bash(mytool:*)"
+
+# Pager for long output. Set to "" or omit to disable paging.
+# pager: "less -F -X"
