@@ -6,7 +6,7 @@ use serde::Serialize;
 use crate::db::EventStore;
 use crate::filter::filter_by_patterns;
 use crate::pager::page_output;
-use crate::risk::{RiskTier, classify_rule};
+use crate::risk::{RiskTier, Rules};
 
 /// Internal Claude mechanics tools - not relevant for permission rules.
 const SKIP_TOOLS: &[&str] = &[
@@ -35,7 +35,7 @@ pub struct SuggestEntry {
 }
 
 /// Generate suggestions from the event database.
-pub fn suggest(store: &EventStore, threshold: u32, min_sessions: u32) -> Result<Vec<SuggestEntry>> {
+pub fn suggest(store: &EventStore, threshold: u32, min_sessions: u32, rules: &Rules) -> Result<Vec<SuggestEntry>> {
     let patterns = store.suggest_patterns(threshold, min_sessions)?;
 
     // Compute suggested rules, filtering noise tools.
@@ -45,7 +45,7 @@ pub fn suggest(store: &EventStore, threshold: u32, min_sessions: u32) -> Result<
         .filter(|p| !SKIP_TOOLS.contains(&p.tool_name.as_str()))
         .map(|p| {
             let suggested_rule = make_rule(&p.tool_name, &p.tool_input);
-            let risk = classify_rule(&suggested_rule);
+            let risk = rules.classify_rule(&suggested_rule);
             let pattern = format_pattern(&p.tool_name, &p.tool_input);
             (pattern, suggested_rule, p.count, p.sessions, risk)
         })
@@ -157,8 +157,9 @@ pub fn run_suggest(
     patterns: &[String],
     format: &str,
     pager: Option<&str>,
+    rules: &Rules,
 ) -> Result<()> {
-    let entries = suggest(store, threshold, min_sessions)?;
+    let entries = suggest(store, threshold, min_sessions, rules)?;
     let entries = filter_by_patterns(entries, patterns, |e| e.suggested_rule.as_str());
 
     if entries.is_empty() {
@@ -264,6 +265,7 @@ mod tests {
     fn suggest_deduplicates_bash_variants() {
         let dir = tempfile::TempDir::new().expect("temp");
         let store = crate::db::EventStore::open(&dir.path().join("test.db")).expect("open");
+        let rules = Rules::default();
 
         // Two variants of "otto ci" with different flags, across enough sessions
         for i in 0..5 {
@@ -284,7 +286,7 @@ mod tests {
                 .expect("insert");
         }
 
-        let entries = suggest(&store, 3, 2).expect("suggest");
+        let entries = suggest(&store, 3, 2, &rules).expect("suggest");
         // Both variants normalize to Bash(otto ci:*) - should be one entry
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].suggested_rule, "Bash(otto ci:*)");
@@ -295,6 +297,7 @@ mod tests {
     fn suggest_filters_task_tools() {
         let dir = tempfile::TempDir::new().expect("temp");
         let store = crate::db::EventStore::open(&dir.path().join("test.db")).expect("open");
+        let rules = Rules::default();
 
         for i in 0..5 {
             let session = format!("s{i}");
@@ -311,7 +314,7 @@ mod tests {
                 .expect("insert");
         }
 
-        let entries = suggest(&store, 3, 2).expect("suggest");
+        let entries = suggest(&store, 3, 2, &rules).expect("suggest");
         assert!(entries.is_empty(), "TaskUpdate should be filtered out");
     }
 
@@ -319,6 +322,7 @@ mod tests {
     fn suggest_with_db() {
         let dir = tempfile::TempDir::new().expect("temp");
         let store = crate::db::EventStore::open(&dir.path().join("test.db")).expect("open");
+        let rules = Rules::default();
 
         for i in 0..5 {
             let session = format!("s{}", i % 3);
@@ -335,7 +339,7 @@ mod tests {
                 .expect("insert");
         }
 
-        let entries = suggest(&store, 3, 2).expect("suggest");
+        let entries = suggest(&store, 3, 2, &rules).expect("suggest");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].pattern, "git status");
         assert_eq!(entries[0].count, 5);

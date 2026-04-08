@@ -11,6 +11,7 @@ mod cli;
 use claude_permit::cmd;
 use claude_permit::config::Config;
 use claude_permit::db::EventStore;
+use claude_permit::risk::Rules;
 use cli::{Cli, Command};
 
 fn setup_logging() -> Result<()> {
@@ -75,12 +76,13 @@ fn run() -> Result<()> {
 
     let cli = Cli::parse();
     let config = Config::load(None).unwrap_or_default();
+    let rules = Rules::from_config(&config);
 
     match cli.command {
         Command::Log => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            let result = cmd::run_log(&store, config.enforce_deny, &config.extra_deny_patterns)?;
+            let result = cmd::run_log(&store, &rules)?;
             print!("{}", result.to_json());
         }
         Command::Check => {
@@ -109,6 +111,7 @@ fn run() -> Result<()> {
                 risk_filter,
                 apply.as_deref(),
                 config.pager.as_deref(),
+                &rules,
             )?;
         }
         Command::Suggest {
@@ -119,12 +122,20 @@ fn run() -> Result<()> {
         } => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            cmd::run_suggest(&store, threshold, sessions, &patterns, &format, config.pager.as_deref())?;
+            cmd::run_suggest(
+                &store,
+                threshold,
+                sessions,
+                &patterns,
+                &format,
+                config.pager.as_deref(),
+                &rules,
+            )?;
         }
         Command::Report { session, format } => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            cmd::run_report(&store, session.as_deref(), &format, config.pager.as_deref())?;
+            cmd::run_report(&store, session.as_deref(), &format, config.pager.as_deref(), &rules)?;
         }
         Command::Clean { older_than, dry_run } => {
             let db_path = EventStore::default_path()?;
@@ -163,7 +174,7 @@ fn run() -> Result<()> {
                 deny: do_deny,
                 dupe: do_dupe,
             };
-            claude_permit::cmd::apply::run_apply(&sp, &slp, &filter, yes, !no_backup)?;
+            claude_permit::cmd::apply::run_apply(&sp, &slp, &filter, yes, !no_backup, &rules)?;
         }
     }
 

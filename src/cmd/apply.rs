@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::cmd::audit::{AuditEntry, audit};
-use crate::risk::Recommendation;
+use crate::risk::{Recommendation, Rules};
 
 /// Which recommendation types to apply.
 pub struct ApplyFilter {
@@ -173,8 +173,9 @@ pub fn run_apply(
     filter: &ApplyFilter,
     write: bool,
     backup: bool,
+    rules: &Rules,
 ) -> Result<()> {
-    let entries = audit(settings_path, settings_local_path, &[], None)?;
+    let entries = audit(settings_path, settings_local_path, &[], None, rules)?;
     apply_entries(&entries, filter, settings_path, settings_local_path, backup, write)
 }
 
@@ -338,6 +339,7 @@ mod tests {
             },
             true,
             false,
+            &Rules::default(),
         )
         .expect("apply");
 
@@ -383,6 +385,7 @@ mod tests {
             },
             true,
             false,
+            &Rules::default(),
         )
         .expect("apply");
 
@@ -418,6 +421,7 @@ mod tests {
             },
             true,
             false,
+            &Rules::default(),
         )
         .expect("apply");
 
@@ -447,7 +451,7 @@ mod tests {
         let local_json = r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#;
         let (gp, lp) = write_settings(dir.path(), global_json, local_json);
 
-        run_apply(&gp, &lp, &ApplyFilter::all(), false, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter::all(), false, false, &Rules::default()).expect("apply");
 
         assert_eq!(std::fs::read_to_string(&gp).expect("read"), global_json);
         assert_eq!(std::fs::read_to_string(&lp).expect("read"), local_json);
@@ -473,6 +477,7 @@ mod tests {
             },
             true,
             false,
+            &Rules::default(),
         )
         .expect("apply");
 
@@ -505,6 +510,7 @@ mod tests {
             },
             true,
             false,
+            &Rules::default(),
         )
         .expect("apply");
 
@@ -521,7 +527,7 @@ mod tests {
             r#"{"permissions":{"allow":[]}}"#,
         );
 
-        run_apply(&gp, &lp, &ApplyFilter::all(), true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter::all(), true, false, &Rules::default()).expect("apply");
 
         let global: Value = serde_json::from_str(&std::fs::read_to_string(&gp).expect("read")).expect("parse");
         assert_eq!(
@@ -538,7 +544,7 @@ mod tests {
         let lp = dir.path().join("settings.local.json");
         std::fs::write(&gp, r#"{"permissions":{"allow":["Bash(ls:*)"]}}"#).expect("write");
 
-        run_apply(&gp, &lp, &ApplyFilter::all(), true, false).expect("apply");
+        run_apply(&gp, &lp, &ApplyFilter::all(), true, false, &Rules::default()).expect("apply");
     }
 
     #[test]
@@ -562,6 +568,7 @@ mod tests {
             },
             true,
             false,
+            &Rules::default(),
         )
         .expect("apply");
 

@@ -3,7 +3,7 @@ use serde::Serialize;
 
 use crate::db::EventStore;
 use crate::pager::page_output;
-use crate::risk::{RiskTier, classify_tool_input};
+use crate::risk::{RiskTier, Rules};
 
 /// Summary of a session's permission activity.
 #[derive(Debug, Serialize)]
@@ -31,7 +31,7 @@ pub struct DangerousEvent {
 }
 
 /// Generate a session report.
-pub fn report(store: &EventStore, session_id: Option<&str>) -> Result<SessionReport> {
+pub fn report(store: &EventStore, session_id: Option<&str>, rules: &Rules) -> Result<SessionReport> {
     let events = store.session_events(session_id)?;
 
     if events.is_empty() {
@@ -54,7 +54,7 @@ pub fn report(store: &EventStore, session_id: Option<&str>) -> Result<SessionRep
     let mut dangerous_events = Vec::new();
 
     for event in &events {
-        let tier = classify_tool_input(&event.tool_name, &event.tool_input);
+        let tier = rules.classify_tool_input(&event.tool_name, &event.tool_input);
         match tier {
             RiskTier::Safe => safe += 1,
             RiskTier::Moderate => moderate += 1,
@@ -88,8 +88,14 @@ pub fn report(store: &EventStore, session_id: Option<&str>) -> Result<SessionRep
 }
 
 /// Run the report command with output formatting.
-pub fn run_report(store: &EventStore, session_id: Option<&str>, format: &str, pager: Option<&str>) -> Result<()> {
-    let rep = report(store, session_id)?;
+pub fn run_report(
+    store: &EventStore,
+    session_id: Option<&str>,
+    format: &str,
+    pager: Option<&str>,
+    rules: &Rules,
+) -> Result<()> {
+    let rep = report(store, session_id, rules)?;
 
     if rep.total_events == 0 {
         println!("No events found for session {}.", rep.session_id);
@@ -137,7 +143,7 @@ mod tests {
     fn report_empty_session() {
         let dir = tempfile::TempDir::new().expect("temp");
         let store = EventStore::open(&dir.path().join("test.db")).expect("open");
-        let rep = report(&store, Some("nonexistent")).expect("report");
+        let rep = report(&store, Some("nonexistent"), &Rules::default()).expect("report");
         assert_eq!(rep.total_events, 0);
     }
 
@@ -164,7 +170,7 @@ mod tests {
             .insert_event("2026-03-24T12:02:00Z", "s1", "Bash", "sudo rm /tmp/x", None, None, None)
             .expect("insert");
 
-        let rep = report(&store, Some("s1")).expect("report");
+        let rep = report(&store, Some("s1"), &Rules::default()).expect("report");
         assert_eq!(rep.total_events, 3);
         assert_eq!(rep.safe_count, 1);
         assert_eq!(rep.moderate_count, 1);
@@ -185,7 +191,7 @@ mod tests {
             .insert_event("2026-03-24T12:00:00Z", "new", "Bash", "tree", None, None, None)
             .expect("insert");
 
-        let rep = report(&store, None).expect("report");
+        let rep = report(&store, None, &Rules::default()).expect("report");
         assert_eq!(rep.session_id, "new");
         assert_eq!(rep.total_events, 1);
     }

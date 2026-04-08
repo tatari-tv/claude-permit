@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::cmd::apply::{apply_entries, parse_apply_filter};
 use crate::filter::filter_by_patterns;
 use crate::pager::page_output;
-use crate::risk::{Recommendation, RiskTier, classify_rule, recommend, subsumes};
+use crate::risk::{Recommendation, RiskTier, Rules, subsumes};
 use crate::settings::load_settings;
 
 /// A single row in the audit output.
@@ -24,14 +24,15 @@ pub fn audit(
     settings_local_path: &Path,
     patterns: &[String],
     risk_filter: Option<RiskTier>,
+    rules: &Rules,
 ) -> Result<Vec<AuditEntry>> {
-    let rules = load_settings(settings_path, settings_local_path)?;
-    let mut entries: Vec<AuditEntry> = rules
+    let loaded = load_settings(settings_path, settings_local_path)?;
+    let mut entries: Vec<AuditEntry> = loaded
         .into_iter()
         .map(|r| {
-            let tier = classify_rule(&r.rule);
+            let tier = rules.classify_rule(&r.rule);
             let source_str = r.source.to_string();
-            let rec = recommend(tier, &source_str, &r.rule);
+            let rec = rules.recommend(tier, &source_str, &r.rule);
             AuditEntry {
                 rule: r.rule,
                 list: r.list.to_string(),
@@ -120,8 +121,9 @@ pub fn run_audit(
     risk_filter: Option<RiskTier>,
     apply: Option<&[String]>,
     pager: Option<&str>,
+    rules: &Rules,
 ) -> Result<()> {
-    let entries = audit(settings_path, settings_local_path, patterns, risk_filter)?;
+    let entries = audit(settings_path, settings_local_path, patterns, risk_filter, rules)?;
 
     match format {
         "json" => println!("{}", format_json(&entries)?),
@@ -177,7 +179,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn write_settings(dir: &Path, global: &str, local: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    fn write_settings(dir: &std::path::Path, global: &str, local: &str) -> (std::path::PathBuf, std::path::PathBuf) {
         let gp = dir.join("settings.json");
         let lp = dir.join("settings.local.json");
         std::fs::write(&gp, global).expect("write global");
@@ -194,7 +196,8 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(sudo rm:*)","WebSearch"]}}"#,
         );
 
-        let entries = audit(&gp, &lp, &[], None).expect("audit");
+        let rules = Rules::default();
+        let entries = audit(&gp, &lp, &[], None, &rules).expect("audit");
         assert_eq!(entries.len(), 5);
 
         // ls is safe
@@ -221,7 +224,8 @@ mod tests {
             r#"{"permissions":{}}"#,
         );
 
-        let entries = audit(&gp, &lp, &[], Some(RiskTier::Dangerous)).expect("audit");
+        let rules = Rules::default();
+        let entries = audit(&gp, &lp, &[], Some(RiskTier::Dangerous), &rules).expect("audit");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].rule, "Bash(sudo rm:*)");
     }
@@ -270,7 +274,8 @@ mod tests {
             r#"{"permissions":{}}"#,
         );
 
-        let entries = audit(&gp, &lp, &[], None).expect("audit");
+        let rules = Rules::default();
+        let entries = audit(&gp, &lp, &[], None, &rules).expect("audit");
         assert_eq!(entries[0].recommendation, Recommendation::Narrow);
     }
 
@@ -284,7 +289,8 @@ mod tests {
             r#"{"permissions":{}}"#,
         );
 
-        let entries = audit(&gp, &lp, &[], None).expect("audit");
+        let rules = Rules::default();
+        let entries = audit(&gp, &lp, &[], None, &rules).expect("audit");
 
         let edit_specific = entries
             .iter()

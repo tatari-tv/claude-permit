@@ -223,7 +223,7 @@ These are blocked at hook time (when `enforce-deny: true`) and flagged in audit 
 - `git tag -d` - local tag deletion
 - `git push * :refs/tags/` - remote tag deletion via refspec
 - `git push * --delete * tag` - remote tag deletion via `--delete`
-- `rm -rf` and `rm -r ` - recursive removal (use `rkvr rmrf` instead)
+- `rm -rf` and `rm -r ` - recursive removal (dangerous, permanently denied)
 - `cd && ` - compound cd with `&&`
 
 ### Automatic Dangerous Rule Detection
