@@ -60,10 +60,8 @@ pub fn run_log(store: &EventStore, rules: &Rules) -> Result<LogResult> {
     )?;
 
     // Check deny enforcement
-    if rules.enforce_deny && payload.tool_name == "Bash" {
-        if rules.matches_deny_list(&normalized) {
-            return Ok(LogResult::Deny(deny_reason(&normalized)));
-        }
+    if rules.enforce_deny && payload.tool_name == "Bash" && rules.matches_deny_list(&normalized) {
+        return Ok(LogResult::Deny(deny_reason(&normalized)));
     }
 
     Ok(LogResult::Passthrough)
