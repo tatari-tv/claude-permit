@@ -123,11 +123,7 @@ mod tests {
     fn load_from_yaml() {
         let dir = TempDir::new().expect("temp");
         let path = dir.path().join("config.yml");
-        std::fs::write(
-            &path,
-            "suggest-threshold: 5\nsuggest-sessions: 3\nenforce-deny: true\n",
-        )
-        .expect("write");
+        std::fs::write(&path, "suggest-threshold: 5\nsuggest-sessions: 3\nenforce-deny: true\n").expect("write");
 
         let config = Config::load(Some(&path)).expect("load");
         assert_eq!(config.suggest_threshold, 5);
@@ -180,11 +176,7 @@ mod tests {
     fn list_config_replace_mode() {
         let dir = TempDir::new().expect("temp");
         let path = dir.path().join("config.yml");
-        std::fs::write(
-            &path,
-            "deny-patterns:\n  mode: replace\n  items:\n    - \"rm \"\n",
-        )
-        .expect("write");
+        std::fs::write(&path, "deny-patterns:\n  mode: replace\n  items:\n    - \"rm \"\n").expect("write");
 
         let config = Config::load(Some(&path)).expect("load");
         assert_eq!(config.deny_patterns.mode, ListMode::Replace);

@@ -216,12 +216,7 @@ const DEFAULT_MODERATE_BASH_COMMANDS: &[&str] = &[
 ];
 
 /// Default overly broad patterns (triggers Narrow recommendation).
-const DEFAULT_BROAD_PATTERNS: &[&str] = &[
-    "Bash(git:*)",
-    "Bash(docker:*)",
-    "Bash(sudo:*)",
-    "Bash(yes:*)",
-];
+const DEFAULT_BROAD_PATTERNS: &[&str] = &["Bash(git:*)", "Bash(docker:*)", "Bash(sudo:*)", "Bash(yes:*)"];
 
 // --- Rules ---
 
@@ -406,7 +401,11 @@ impl Rules {
 
     fn classify_mcp_tool(&self, tool: &str) -> RiskTier {
         let base = tool.split('(').next().unwrap_or(tool);
-        if self.mcp_write_tools.iter().any(|prefix| base.starts_with(prefix.as_str())) {
+        if self
+            .mcp_write_tools
+            .iter()
+            .any(|prefix| base.starts_with(prefix.as_str()))
+        {
             RiskTier::Dangerous
         } else {
             RiskTier::Moderate
@@ -458,9 +457,7 @@ fn starts_with_env_var(cmd: &str) -> bool {
 /// Check if a command matches any prefix in the given list.
 fn matches_command_list(cmd: &str, list: &[String]) -> bool {
     list.iter().any(|prefix| {
-        cmd == prefix.as_str()
-            || cmd.starts_with(&format!("{prefix} "))
-            || cmd.starts_with(&format!("{prefix}:"))
+        cmd == prefix.as_str() || cmd.starts_with(&format!("{prefix} ")) || cmd.starts_with(&format!("{prefix}:"))
     })
 }
 
@@ -660,13 +657,19 @@ mod tests {
     #[test]
     fn recommend_promote_safe_local() {
         let r = rules();
-        assert_eq!(r.recommend(RiskTier::Safe, "local", "Bash(ls:*)"), Recommendation::Promote);
+        assert_eq!(
+            r.recommend(RiskTier::Safe, "local", "Bash(ls:*)"),
+            Recommendation::Promote
+        );
     }
 
     #[test]
     fn recommend_keep_moderate_local() {
         let r = rules();
-        assert_eq!(r.recommend(RiskTier::Moderate, "local", "Bash(cargo:*)"), Recommendation::Keep);
+        assert_eq!(
+            r.recommend(RiskTier::Moderate, "local", "Bash(cargo:*)"),
+            Recommendation::Keep
+        );
     }
 
     #[test]
@@ -747,7 +750,10 @@ mod tests {
     fn git_dash_c_is_dangerous() {
         let r = rules();
         assert_eq!(r.classify_rule("Bash(git -C /some/path push:*)"), RiskTier::Dangerous);
-        assert_eq!(r.classify_rule("Bash(git -C ~/repos/foo status:*)"), RiskTier::Dangerous);
+        assert_eq!(
+            r.classify_rule("Bash(git -C ~/repos/foo status:*)"),
+            RiskTier::Dangerous
+        );
     }
 
     #[test]

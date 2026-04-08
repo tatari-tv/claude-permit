@@ -88,7 +88,13 @@ pub fn report(store: &EventStore, session_id: Option<&str>, rules: &Rules) -> Re
 }
 
 /// Run the report command with output formatting.
-pub fn run_report(store: &EventStore, session_id: Option<&str>, format: &str, pager: Option<&str>, rules: &Rules) -> Result<()> {
+pub fn run_report(
+    store: &EventStore,
+    session_id: Option<&str>,
+    format: &str,
+    pager: Option<&str>,
+    rules: &Rules,
+) -> Result<()> {
     let rep = report(store, session_id, rules)?;
 
     if rep.total_events == 0 {

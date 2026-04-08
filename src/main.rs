@@ -122,7 +122,15 @@ fn run() -> Result<()> {
         } => {
             let db_path = EventStore::default_path()?;
             let store = EventStore::open(&db_path)?;
-            cmd::run_suggest(&store, threshold, sessions, &patterns, &format, config.pager.as_deref(), &rules)?;
+            cmd::run_suggest(
+                &store,
+                threshold,
+                sessions,
+                &patterns,
+                &format,
+                config.pager.as_deref(),
+                &rules,
+            )?;
         }
         Command::Report { session, format } => {
             let db_path = EventStore::default_path()?;

@@ -122,8 +122,8 @@ mod tests {
 
     #[test]
     fn log_inserts_event_with_tier() {
-        use crate::hook::normalize_tool_input;
         use crate::hook::HookPayload;
+        use crate::hook::normalize_tool_input;
 
         let dir = tempfile::TempDir::new().expect("temp dir");
         let store = EventStore::open(&dir.path().join("test.db")).expect("open");
