@@ -12,6 +12,7 @@ use claude_permit::cmd;
 use claude_permit::config::Config;
 use claude_permit::db::EventStore;
 use claude_permit::risk::Rules;
+use claude_permit::settings::discover_settings_local;
 use cli::{Cli, Command};
 
 fn setup_logging() -> Result<()> {
@@ -47,11 +48,8 @@ fn settings_path() -> PathBuf {
         .join("settings.json")
 }
 
-fn settings_local_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude")
-        .join("settings.local.json")
+fn cwd() -> PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 fn main() {
@@ -87,7 +85,7 @@ fn run() -> Result<()> {
         }
         Command::Check => {
             let db_path = EventStore::default_path()?;
-            let all_passed = cmd::run_check(&db_path, &settings_path(), &settings_local_path())?;
+            let all_passed = cmd::run_check(&db_path, &settings_path(), &discover_settings_local(&cwd()))?;
             if !all_passed {
                 std::process::exit(1);
             }
@@ -101,7 +99,7 @@ fn run() -> Result<()> {
             patterns,
         } => {
             let sp = settings.unwrap_or_else(settings_path);
-            let slp = settings_local.unwrap_or_else(settings_local_path);
+            let slp = settings_local.unwrap_or_else(|| discover_settings_local(&cwd()));
             let risk_filter = risk.and_then(|r| claude_permit::risk::RiskTier::from_str_opt(&r));
             cmd::run_audit(
                 &sp,
@@ -167,7 +165,7 @@ fn run() -> Result<()> {
             }
 
             let sp = settings.unwrap_or_else(settings_path);
-            let slp = settings_local.unwrap_or_else(settings_local_path);
+            let slp = settings_local.unwrap_or_else(|| discover_settings_local(&cwd()));
             let filter = claude_permit::cmd::apply::ApplyFilter {
                 promote: do_promote,
                 remove: do_remove,
