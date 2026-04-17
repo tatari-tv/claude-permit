@@ -107,13 +107,12 @@ pub fn load_settings(settings_path: &Path, settings_local_path: &Path) -> Result
 
 /// Walk up from `start_dir` looking for `.claude/settings.local.json`.
 /// Falls back to `~/.claude/settings.local.json` if no project-level file found.
-/// Existence check is intentional: discovery only activates for files that already
-/// exist, matching Claude Code's own discovery semantics.
+/// Only matches regular files so a directory named `settings.local.json` is skipped.
 pub fn discover_settings_local(start_dir: &Path) -> PathBuf {
     let mut dir = start_dir.to_path_buf();
     loop {
         let candidate = dir.join(".claude").join("settings.local.json");
-        if candidate.exists() {
+        if candidate.is_file() {
             return candidate;
         }
         match dir.parent() {
@@ -200,7 +199,7 @@ mod tests {
         let empty = TempDir::new().expect("temp");
         let result = discover_settings_local(empty.path());
         let expected = dirs::home_dir()
-            .expect("home dir")
+            .unwrap_or_else(|| PathBuf::from("."))
             .join(".claude")
             .join("settings.local.json");
         assert_eq!(result, expected);
