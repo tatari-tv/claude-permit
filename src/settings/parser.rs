@@ -1,6 +1,6 @@
 use eyre::{Context, Result};
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Where a permission rule comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +105,28 @@ pub fn load_settings(settings_path: &Path, settings_local_path: &Path) -> Result
     Ok(rules)
 }
 
+/// Walk up from `start_dir` looking for `.claude/settings.local.json`.
+/// Falls back to `~/.claude/settings.local.json` if no project-level file found.
+/// Existence check is intentional: discovery only activates for files that already
+/// exist, matching Claude Code's own discovery semantics.
+pub fn discover_settings_local(start_dir: &Path) -> PathBuf {
+    let mut dir = start_dir.to_path_buf();
+    loop {
+        let candidate = dir.join(".claude").join("settings.local.json");
+        if candidate.exists() {
+            return candidate;
+        }
+        match dir.parent() {
+            Some(parent) => dir = parent.to_path_buf(),
+            None => break,
+        }
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claude")
+        .join("settings.local.json")
+}
+
 fn parse_settings_file(path: &Path) -> Result<SettingsFile> {
     let content = std::fs::read_to_string(path).context("Failed to read file")?;
     let settings: SettingsFile = serde_json::from_str(&content).context("Failed to parse JSON")?;
@@ -156,6 +178,32 @@ mod tests {
         let local = dir.path().join("also-nonexistent.json");
         let rules = load_settings(&global, &local).expect("load");
         assert!(rules.is_empty());
+    }
+
+    #[test]
+    fn discover_finds_project_settings_local() {
+        let root = TempDir::new().expect("temp");
+        let claude_dir = root.path().join(".claude");
+        std::fs::create_dir_all(&claude_dir).expect("mkdir");
+        let expected = claude_dir.join("settings.local.json");
+        std::fs::write(&expected, r#"{"permissions":{}}"#).expect("write");
+
+        let subdir = root.path().join("project").join("src");
+        std::fs::create_dir_all(&subdir).expect("mkdir sub");
+
+        let found = discover_settings_local(&subdir);
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn discover_falls_back_to_home() {
+        let empty = TempDir::new().expect("temp");
+        let result = discover_settings_local(empty.path());
+        let expected = dirs::home_dir()
+            .expect("home dir")
+            .join(".claude")
+            .join("settings.local.json");
+        assert_eq!(result, expected);
     }
 
     #[test]
