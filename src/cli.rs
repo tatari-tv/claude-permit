@@ -101,6 +101,9 @@ pub enum Command {
         yes: bool,
     },
 
+    /// Check for and install updates from GitHub releases
+    Update(renew::UpdateCmd),
+
     /// Apply audit recommendations to settings files
     Apply {
         /// Apply "promote" recommendations (move safe local rules to global)

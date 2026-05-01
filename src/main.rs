@@ -78,6 +78,16 @@ fn run() -> Result<()> {
     let config = Config::load(None).unwrap_or_default();
     let rules = Rules::from_config(&config);
 
+    let renew_handle = match &cli.command {
+        Command::Log | Command::Check => None,
+        Command::Update(_) => Some(renew::renew!().expect("repository metadata")),
+        _ => {
+            let r = renew::renew!().expect("repository metadata");
+            r.notify_if_outdated();
+            Some(r)
+        }
+    };
+
     match cli.command {
         Command::Log => {
             let db_path = EventStore::default_path()?;
@@ -145,6 +155,10 @@ fn run() -> Result<()> {
         Command::Install { settings, yes } => {
             let sp = settings.unwrap_or_else(settings_path);
             cmd::run_install(&sp, yes)?;
+        }
+        Command::Update(cmd) => {
+            let r = renew_handle.expect("renew constructed for non-hot-path commands");
+            std::process::exit(cmd.run(&r));
         }
         Command::Apply {
             promote,
