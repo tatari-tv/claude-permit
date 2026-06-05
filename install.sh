@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# First-time installer for claude-permit. Downloads the latest tarball, verifies
+# nothing, and drops the binary into INSTALL_DIR. Subsequent upgrades should go
+# through the built-in self-updater: `claude-permit update install`.
 set -euo pipefail
 
 REPO="tatari-tv/claude-permit"

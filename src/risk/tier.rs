@@ -536,10 +536,12 @@ mod tests {
     #[test]
     fn replace_deny_list_removes_defaults() {
         use crate::config::{Config, ListConfig, ListMode};
-        let mut config = Config::default();
-        config.deny_patterns = ListConfig {
-            mode: ListMode::Replace,
-            items: vec!["shutdown".to_string()],
+        let config = Config {
+            deny_patterns: ListConfig {
+                mode: ListMode::Replace,
+                items: vec!["shutdown".to_string()],
+            },
+            ..Default::default()
         };
         let r = Rules::from_config(&config);
         // rm should no longer be denied
@@ -551,10 +553,12 @@ mod tests {
     #[test]
     fn extend_deny_list_adds_to_defaults() {
         use crate::config::{Config, ListConfig, ListMode};
-        let mut config = Config::default();
-        config.deny_patterns = ListConfig {
-            mode: ListMode::Extend,
-            items: vec!["shutdown".to_string()],
+        let config = Config {
+            deny_patterns: ListConfig {
+                mode: ListMode::Extend,
+                items: vec!["shutdown".to_string()],
+            },
+            ..Default::default()
         };
         let r = Rules::from_config(&config);
         // Original patterns still apply

@@ -22,6 +22,29 @@ cargo install --git https://github.com/tatari-tv/claude-permit
 
 ---
 
+## Updating
+
+After the first install, subsequent upgrades go through the built-in `update` subcommand, backed by the [`renew`](https://github.com/tatari-tv/renew) library:
+
+```bash
+claude-permit update              # check whether a newer release is available (default action)
+claude-permit update check        # explicit check (exit 0 = current, 1 = update available, 2 = error)
+claude-permit update install      # download latest, verify sha256, atomic-replace this binary
+claude-permit update install --yes
+claude-permit update revert       # restore the previous version from the backup slot
+```
+
+`update install` writes a backup of the current binary to `~/.local/share/claude-permit/<install-path-hash>/backup/` before swapping. `revert` restores it. Only the most recent prior version is retained.
+
+When `claude-permit` is invoked interactively (any subcommand other than `log`/`check`) and a newer release exists, a one-line stderr notice is printed. The `log` hook hot path is exempt from this entirely - no cache reads, no network probes.
+
+**Caveats:**
+
+- **Source installs:** users who installed via `cargo install --git ...` or `cargo install --path .` should keep updating that way. `claude-permit update install` swaps the binary in place but does not refresh cargo's `~/.cargo/.crates.toml` registry.
+- **Do not pass an explicit `VERSION`** to `update install`. Renew v0.1.2 has a known bug where `install_version` queries `/releases/latest` and rejects mismatches, so `claude-permit update install 0.1.5` fails unless `0.1.5` is also the latest tag. Omit the positional argument to install latest.
+
+---
+
 ## Problem
 
 Claude Code accumulates permission rules over time through one-off approvals during sessions. These rules live in `settings.json` and `settings.local.json` with no built-in way to review, prune, or promote them. After a few weeks of use, you end up with hundreds of rules - some dangerously broad, some stale, some duplicated - and no feedback loop between your permission decisions and your permission policy.

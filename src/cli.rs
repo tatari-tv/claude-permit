@@ -6,7 +6,7 @@ use std::path::PathBuf;
     name = "claude-permit",
     about = "Manage Claude Code permission hygiene",
     version = env!("GIT_DESCRIBE"),
-    after_help = "Logs are written to: ~/.local/share/claude-permit/logs/claude-permit.log"
+    after_help = "Logs are written to: ~/.local/share/claude-permit/logs/claude-permit.log\n\nSelf-update: see `claude-permit update --help`."
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -100,6 +100,9 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
+
+    /// Check for and install updates from GitHub releases
+    Update(renew::UpdateCmd),
 
     /// Apply audit recommendations to settings files
     Apply {
