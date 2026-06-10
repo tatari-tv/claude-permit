@@ -74,7 +74,7 @@ pub fn report(store: &EventStore, session_id: Option<&str>, rules: &Rules) -> Re
         .into_iter()
         .map(|(tool_name, count)| ToolCount { tool_name, count })
         .collect();
-    tool_counts.sort_by(|a, b| b.count.cmp(&a.count));
+    tool_counts.sort_by_key(|b| std::cmp::Reverse(b.count));
 
     Ok(SessionReport {
         session_id: sid,

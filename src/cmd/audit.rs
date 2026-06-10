@@ -18,6 +18,16 @@ pub struct AuditEntry {
     pub recommendation: Recommendation,
 }
 
+/// Breadth of a rule's scope: higher applies in more places. Global settings apply
+/// everywhere; local (project) settings apply only within their project. A rule may only
+/// be deduped against a covering rule whose scope rank is >= its own.
+fn scope_rank(source: &str) -> u8 {
+    match source {
+        "global" => 1,
+        _ => 0, // "local" (and any narrower scope) ranks below global
+    }
+}
+
 /// Run the audit: load settings, classify each rule, produce entries.
 pub fn audit(
     settings_path: &Path,
@@ -46,15 +56,25 @@ pub fn audit(
     // Mark rules made redundant by a broader rule in the same list (allow or deny).
     // Cross-list matches are intentional: deny rules carve out from a broad allow.
     // Permanent-deny rules (Recommendation::Deny) are never overridden.
-    let snapshots: Vec<(String, String)> = entries.iter().map(|e| (e.list.clone(), e.rule.clone())).collect();
+    //
+    // Scope matters: a rule is only redundant if the covering rule has equal-or-broader
+    // scope. Global settings apply everywhere; local settings apply only in their project.
+    // So a global rule must NEVER be marked redundant by a local rule that "covers" it,
+    // since dropping the global rule would lose coverage outside that project.
+    let snapshots: Vec<(String, String, String)> = entries
+        .iter()
+        .map(|e| (e.source.clone(), e.list.clone(), e.rule.clone()))
+        .collect();
     for (i, entry) in entries.iter_mut().enumerate() {
         if entry.recommendation == Recommendation::Deny {
             continue;
         }
-        let covered = snapshots
-            .iter()
-            .enumerate()
-            .any(|(j, (list, rule))| j != i && *list == entry.list && subsumes(rule, &entry.rule));
+        let covered = snapshots.iter().enumerate().any(|(j, (source, list, rule))| {
+            j != i
+                && *list == entry.list
+                && scope_rank(source) >= scope_rank(&entry.source)
+                && subsumes(rule, &entry.rule)
+        });
         if covered {
             entry.recommendation = Recommendation::Dupe;
         }
@@ -307,5 +327,63 @@ mod tests {
         // The broader rules keep their own recommendations
         let edit_broad = entries.iter().find(|e| e.rule == "Edit(**)").expect("edit broad");
         assert_ne!(edit_broad.recommendation, Recommendation::Dupe);
+    }
+
+    #[test]
+    fn global_rule_not_deduped_by_local_broader_rule() {
+        // Regression: a broad LOCAL rule must NOT mark a narrow GLOBAL rule redundant.
+        // The local rule only applies in its project; dropping the global rule would lose
+        // coverage everywhere else. global Bash(git status:*) must survive local Bash(git:*).
+        let dir = TempDir::new().expect("temp");
+        let (gp, lp) = write_settings(
+            dir.path(),
+            r#"{"permissions":{"allow":["Bash(git status:*)"]}}"#,
+            r#"{"permissions":{"allow":["Bash(git:*)"]}}"#,
+        );
+
+        let rules = Rules::default();
+        let entries = audit(&gp, &lp, &[], None, &rules).expect("audit");
+
+        let git_global = entries
+            .iter()
+            .find(|e| e.rule == "Bash(git status:*)" && e.source == "global")
+            .expect("global git status");
+        assert_ne!(
+            git_global.recommendation,
+            Recommendation::Dupe,
+            "global rule must not be deduped by a narrower-scoped local rule"
+        );
+    }
+
+    #[test]
+    fn local_rule_deduped_by_global_broader_rule() {
+        // Positive: a broad GLOBAL rule correctly marks a narrow LOCAL rule redundant.
+        // Global applies everywhere, so the local Bash(git status:*) is genuinely covered.
+        let dir = TempDir::new().expect("temp");
+        let (gp, lp) = write_settings(
+            dir.path(),
+            r#"{"permissions":{"allow":["Bash(git:*)"]}}"#,
+            r#"{"permissions":{"allow":["Bash(git status:*)"]}}"#,
+        );
+
+        let rules = Rules::default();
+        let entries = audit(&gp, &lp, &[], None, &rules).expect("audit");
+
+        let git_local = entries
+            .iter()
+            .find(|e| e.rule == "Bash(git status:*)" && e.source == "local")
+            .expect("local git status");
+        assert_eq!(
+            git_local.recommendation,
+            Recommendation::Dupe,
+            "local rule covered by a broader global rule should be a dupe"
+        );
+
+        // The broad global rule keeps its own recommendation (Narrow), not Dupe.
+        let git_global = entries
+            .iter()
+            .find(|e| e.rule == "Bash(git:*)" && e.source == "global")
+            .expect("global git");
+        assert_ne!(git_global.recommendation, Recommendation::Dupe);
     }
 }
