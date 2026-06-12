@@ -40,7 +40,8 @@ impl EventStore {
 
     /// Default database path: ~/.local/share/claude-permit/events.db
     pub fn default_path() -> Result<PathBuf> {
-        let data_dir = dirs::data_local_dir().ok_or_else(|| eyre::eyre!("Could not determine local data directory"))?;
+        let data_dir =
+            crate::config::xdg_data_dir().ok_or_else(|| eyre::eyre!("Could not determine local data directory"))?;
         Ok(data_dir.join("claude-permit").join("events.db"))
     }
 

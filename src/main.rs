@@ -16,7 +16,7 @@ use claude_permit::settings::discover_settings_local;
 use cli::{Cli, Command};
 
 fn setup_logging() -> Result<()> {
-    let log_dir = dirs::data_local_dir()
+    let log_dir = claude_permit::config::xdg_data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("claude-permit")
         .join("logs");
