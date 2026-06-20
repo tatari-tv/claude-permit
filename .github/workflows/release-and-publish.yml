@@ -78,7 +78,7 @@ jobs:
         run: sha256sum claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz > claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-permit-${{ matrix.suffix }}
           path: |
@@ -132,7 +132,7 @@ jobs:
         run: shasum -a 256 claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz > claude-permit-${{ github.ref_name }}-${{ matrix.suffix }}.tar.gz.sha256
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-permit-${{ matrix.suffix }}
           path: |
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
