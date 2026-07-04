@@ -15,7 +15,7 @@ Wire the `renew` library (v0.1.2) into `claude-permit` so users can discover and
 
 `claude-permit` ships via two paths today:
 
-1. `install.sh` -- clones the repo and runs `cargo install --path .`.
+1. `install.sh` -- downloads the latest release tarball and installs the binary to `INSTALL_DIR` (default `~/.local/bin`).
 2. Tagged GitHub releases with prebuilt tarballs for `linux-amd64`, `linux-arm64`, `macos-x86_64`, `macos-arm64` (produced by `.github/workflows/release-and-publish.yml`).
 
 There is no in-tool mechanism to (a) tell the user a newer release exists or (b) install it. Users must re-run `install.sh` or download a tarball by hand.
